@@ -28,7 +28,9 @@ export interface BellPolicy extends ProtocolLimits {
   injectorRetryDelayMs: number;
   busyRetryDelayMs: number;
   busyMaxAttempts: number;
+  maxPendingWakes: number;
   sqliteBusyTimeoutMs: number;
+  acceptedRetentionDays: number;
 }
 
 export interface InjectorConfig {
@@ -150,7 +152,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BellConfig {
     injectorRetryDelayMs: positiveInteger(env, "BELL_INJECTOR_RETRY_DELAY_MS"),
     busyRetryDelayMs: positiveInteger(env, "BELL_BUSY_RETRY_DELAY_MS"),
     busyMaxAttempts: positiveInteger(env, "BELL_BUSY_MAX_ATTEMPTS"),
+    maxPendingWakes: positiveInteger(env, "BELL_MAX_PENDING_WAKES"),
     sqliteBusyTimeoutMs: positiveInteger(env, "BELL_SQLITE_BUSY_TIMEOUT_MS"),
+    acceptedRetentionDays: positiveInteger(env, "BELL_ACCEPTED_RETENTION_DAYS"),
     maxEventBytes: positiveInteger(env, "BELL_MAX_EVENT_BYTES"),
     maxWakeIdChars: positiveInteger(env, "BELL_MAX_WAKE_ID_CHARS"),
     maxReasonChars: positiveInteger(env, "BELL_MAX_REASON_CHARS"),

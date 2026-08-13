@@ -1,5 +1,5 @@
-import type { BellConfig } from "./config.js";
 import { performance } from "node:perf_hooks";
+import type { BellConfig } from "./config.js";
 import { BellControlClient } from "./control-client.js";
 import { delay } from "./delay.js";
 import { BellDispatcher } from "./dispatcher.js";
@@ -33,7 +33,11 @@ export async function runBell(
   let ledger: SqliteWakeLedger | undefined;
   let sessionController: AbortController | undefined;
   try {
-    ledger = new SqliteWakeLedger(config.stateDirectory, config.policy.sqliteBusyTimeoutMs);
+    ledger = new SqliteWakeLedger(
+      config.stateDirectory,
+      config.policy.sqliteBusyTimeoutMs,
+      config.policy.acceptedRetentionDays,
+    );
     const control = new BellControlClient({
       ackUrl: config.ackUrl,
       reportUrl: config.reportUrl,
@@ -61,6 +65,7 @@ export async function runBell(
     while (!dependencies.signal.aborted) {
       sessionController = new AbortController();
       let connectedAt: number | undefined;
+      let streamEndedAt: number | undefined;
       const abortSession = (): void => sessionController?.abort(dependencies.signal.reason);
       dependencies.signal.addEventListener("abort", abortSession, { once: true });
       let streamError: unknown;
@@ -82,6 +87,7 @@ export async function runBell(
       } catch (error) {
         streamError = error;
       } finally {
+        streamEndedAt = now();
         dependencies.signal.removeEventListener("abort", abortSession);
       }
 
@@ -96,7 +102,8 @@ export async function runBell(
       }
       if (
         connectedAt !== undefined &&
-        now() - connectedAt >= config.policy.streamIdleTimeoutMs
+        streamEndedAt !== undefined &&
+        streamEndedAt - connectedAt >= config.policy.streamIdleTimeoutMs
       ) {
         reconnects = 0;
         backoffMs = config.policy.reconnectInitialMs;

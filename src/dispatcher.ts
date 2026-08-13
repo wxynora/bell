@@ -1,5 +1,5 @@
 import type { BellPolicy } from "./config.js";
-import type { BellControlClient, WakeReportStatus } from "./control-client.js";
+import type { BellControlClient, WakeBlockReason } from "./control-client.js";
 import { delay } from "./delay.js";
 import type { InjectorOutcome } from "./injector.js";
 import type { Logger } from "./logging.js";
@@ -30,6 +30,7 @@ export interface DispatcherOptions {
     | "injectorRetryDelayMs"
     | "busyRetryDelayMs"
     | "busyMaxAttempts"
+    | "maxPendingWakes"
   >;
   logger: Logger;
   signal: AbortSignal;
@@ -100,6 +101,10 @@ export class BellDispatcher {
       this.#options.logger.debug("duplicate pending wake ignored", { wake: safeId(wake.wakeId) });
       return;
     }
+    const pendingWakeCount = this.#queue.length + (this.#active === undefined ? 0 : 1);
+    if (pendingWakeCount >= this.#options.policy.maxPendingWakes) {
+      throw new BellTransportError("local wake queue capacity reached", "retryable");
+    }
     const item: QueueItem = {
       wake,
       ackOnly: this.#options.ledger.isAccepted(wake.wakeId),
@@ -115,6 +120,8 @@ export class BellDispatcher {
     if (queued !== undefined) {
       queued.cancelled = true;
       this.#queuedByWakeId.delete(wakeId);
+      const queueIndex = this.#queue.indexOf(queued);
+      if (queueIndex !== -1) this.#queue.splice(queueIndex, 1);
       this.#options.logger.info("queued wake cancelled", { wake: safeId(wakeId) });
       return;
     }
@@ -165,24 +172,24 @@ export class BellDispatcher {
         return;
       }
       if (outcome.status === "permanent_error") {
-        await this.#report(item.wake, "permanent_error", outcome.errorCode);
+        await this.#reportBlocked(item.wake, "permanent_error", outcome.errorCode);
         throw new BellDispatcherFatalError("injector reported a permanent error");
       }
       if (item.cancelled) return;
       if (outcome.status === "busy") {
         busyAttempts += 1;
         if (busyAttempts >= this.#options.policy.busyMaxAttempts) {
-          await this.#report(item.wake, "busy", "injector_busy");
+          await this.#reportBlocked(item.wake, "busy_exhausted", "injector_busy");
           return;
         }
         await delay(this.#options.policy.busyRetryDelayMs, this.#options.signal);
         continue;
       }
       retryableAttempts += 1;
-      const reportStatus: WakeReportStatus =
-        outcome.status === "timeout" ? "timeout" : "retryable_error";
+      const blockReason: WakeBlockReason =
+        outcome.status === "timeout" ? "timeout_exhausted" : "retryable_exhausted";
       if (retryableAttempts >= this.#options.policy.injectorMaxAttempts) {
-        await this.#report(item.wake, reportStatus, outcome.errorCode);
+        await this.#reportBlocked(item.wake, blockReason, outcome.errorCode);
         return;
       }
       await delay(this.#options.policy.injectorRetryDelayMs, this.#options.signal);
@@ -209,26 +216,21 @@ export class BellDispatcher {
     }
   }
 
-  async #report(wake: WakeEvent, status: WakeReportStatus, errorCode: string): Promise<void> {
+  async #reportBlocked(wake: WakeEvent, reason: WakeBlockReason, errorCode: string): Promise<void> {
     try {
       await this.#options.control.report(
         {
           wakeId: wake.wakeId,
           connectionEpoch: wake.connectionEpoch,
-          status,
+          status: "blocked",
+          reason,
           errorCode,
         },
         this.#options.signal,
       );
     } catch (error) {
-      if (this.#isFatalControlError(error)) {
-        throw new BellDispatcherFatalError("server permanently rejected wake report", {
-          cause: error,
-        });
-      }
-      this.#options.logger.warn("wake failure report could not be delivered", {
-        wake: safeId(wake.wakeId),
-        status,
+      throw new BellDispatcherFatalError("server did not confirm blocked wake report", {
+        cause: error,
       });
     }
   }

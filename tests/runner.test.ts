@@ -83,3 +83,56 @@ test("a stable SSE session resets the consecutive reconnect budget", async () =>
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("injector drain time after EOF cannot reset the reconnect budget", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "bell-runner-drain-"));
+  let calls = 0;
+  let clock = 0;
+  const base = testConfig();
+  const config = testConfig({
+    stateDirectory: directory,
+    policy: {
+      ...base.policy,
+      streamIdleTimeoutMs: 100,
+      reconnectMaxAttempts: 1,
+    },
+  });
+  try {
+    await assert.rejects(
+      runBell(config, {
+        logger: silentLogger,
+        signal: new AbortController().signal,
+        random: () => 0.5,
+        now: () => clock,
+        injectorRun: async () => {
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          clock += config.policy.streamIdleTimeoutMs;
+          return { status: "accepted" };
+        },
+        fetchImpl: async (_input, init) => {
+          if (init?.method === "POST") return new Response(null, { status: 204 });
+          calls += 1;
+          return new Response(
+            `event: connected\ndata: ${JSON.stringify({
+              version: 1,
+              connection_epoch: `epoch-${calls}`,
+            })}\n\nevent: wake\ndata: ${JSON.stringify({
+              version: 1,
+              connection_epoch: `epoch-${calls}`,
+              wake_id: `wake-${calls}`,
+              reason: "notification",
+              message: "read state",
+              created_at: "2026-08-13T00:00:00.000Z",
+            })}\n\n`,
+            { headers: { "content-type": "text/event-stream" } },
+          );
+        },
+      }),
+      (error: unknown) =>
+        error instanceof BellTransportError && error.message === "SSE reconnect budget exhausted",
+    );
+    assert.equal(calls, 2);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

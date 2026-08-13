@@ -72,13 +72,32 @@ export async function consumeBellStream(options: BellStreamOptions): Promise<Bel
     }
 
     let connectedEpoch: string | undefined;
-    const decodedEvents: BellEvent[] = [];
+    let stopAfterHandshakeEpoch: string | undefined;
     const parser = new SseParser(
       {
         onComment: () => options.onHeartbeat?.(),
         onEvent: (event) => {
+          if (stopAfterHandshakeEpoch !== undefined) return;
           const decoded = decodeBellEvent(event, options.limits);
-          if (decoded !== undefined) decodedEvents.push(decoded);
+          if (decoded === undefined) return;
+          if (connectedEpoch === undefined) {
+            if (decoded.kind !== "connected") {
+              throw new BellProtocolError("first Bell event must be connected");
+            }
+            connectedEpoch = decoded.connectionEpoch;
+            armTimeout("idle", options.idleTimeoutMs);
+          } else {
+            if (decoded.kind === "connected") {
+              throw new BellProtocolError("connected event was repeated on one stream");
+            }
+            if (decoded.connectionEpoch !== connectedEpoch) {
+              throw new BellProtocolError("event connection_epoch does not match the stream");
+            }
+          }
+          options.onEvent(decoded);
+          if (decoded.kind === "connected" && options.stopAfterHandshake) {
+            stopAfterHandshakeEpoch = decoded.connectionEpoch;
+          }
         },
       },
       options.limits.maxEventBytes,
@@ -98,35 +117,11 @@ export async function consumeBellStream(options: BellStreamOptions): Promise<Bel
         }
         throw new BellTransportError("SSE stream read failed", "retryable", { cause: error });
       }
-      if (result.done) {
-        parser.finish();
-        throw new BellTransportError("SSE stream ended", "retryable");
-      }
-      if (connectedEpoch !== undefined) armTimeout("idle", options.idleTimeoutMs);
       try {
-        parser.push(result.value);
-        while (decodedEvents.length > 0) {
-          const event = decodedEvents.shift();
-          if (event === undefined) break;
-          if (connectedEpoch === undefined) {
-            if (event.kind !== "connected") {
-              throw new BellProtocolError("first Bell event must be connected");
-            }
-            connectedEpoch = event.connectionEpoch;
-            armTimeout("idle", options.idleTimeoutMs);
-          } else {
-            if (event.kind === "connected") {
-              throw new BellProtocolError("connected event was repeated on one stream");
-            }
-            if (event.connectionEpoch !== connectedEpoch) {
-              throw new BellProtocolError("event connection_epoch does not match the stream");
-            }
-          }
-          options.onEvent(event);
-          if (event.kind === "connected" && options.stopAfterHandshake) {
-            await reader.cancel();
-            return { connectionEpoch: event.connectionEpoch };
-          }
+        if (result.done) parser.finish();
+        else {
+          if (connectedEpoch !== undefined) armTimeout("idle", options.idleTimeoutMs);
+          parser.push(result.value);
         }
       } catch (error) {
         if (error instanceof BellProtocolError || error instanceof SseParseError) {
@@ -134,8 +129,14 @@ export async function consumeBellStream(options: BellStreamOptions): Promise<Bel
         }
         throw error;
       }
+      if (stopAfterHandshakeEpoch !== undefined) {
+        await reader.cancel();
+        return { connectionEpoch: stopAfterHandshakeEpoch };
+      }
+      if (result.done) throw new BellTransportError("SSE stream ended", "retryable");
     }
   } finally {
+    requestController.abort(abortError("SSE consumer stopped"));
     if (timer !== undefined) clearTimeout(timer);
     options.signal.removeEventListener("abort", parentAbort);
   }

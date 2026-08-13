@@ -99,6 +99,49 @@ test("SSE heartbeat comments cannot extend the connected handshake deadline", as
   );
 });
 
+test("SSE stops parsing the current chunk when delivery applies backpressure", async () => {
+  const config = testConfig();
+  let wakeCount = 0;
+  await assert.rejects(
+    consumeBellStream({
+      url: config.streamUrl,
+      token: config.token,
+      limits: config.policy,
+      connectTimeoutMs: config.policy.connectTimeoutMs,
+      idleTimeoutMs: config.policy.streamIdleTimeoutMs,
+      signal: new AbortController().signal,
+      onEvent: (event) => {
+        if (event.kind !== "wake") return;
+        wakeCount += 1;
+        if (wakeCount === 3) {
+          throw new BellTransportError("local wake queue capacity reached", "retryable");
+        }
+      },
+      fetchImpl: async () =>
+        eventStream(
+          `event: connected\ndata: ${JSON.stringify({ version: 1, connection_epoch: "epoch-1" })}\n\n` +
+            ["wake-1", "wake-2", "wake-3"]
+              .map(
+                (wakeId) =>
+                  `event: wake\ndata: ${JSON.stringify({
+                    version: 1,
+                    connection_epoch: "epoch-1",
+                    wake_id: wakeId,
+                    reason: "notification",
+                    message: "read state",
+                    created_at: "2026-08-13T00:00:00.000Z",
+                  })}\n\n`,
+              )
+              .join("") +
+            "event: wake\ndata: not-json\n\n",
+        ),
+    }),
+    (error: unknown) =>
+      error instanceof BellTransportError && error.message === "local wake queue capacity reached",
+  );
+  assert.equal(wakeCount, 3);
+});
+
 test("control client retries a temporary ACK with the same wake_id", async () => {
   const config = testConfig();
   const payloads: unknown[] = [];
@@ -115,4 +158,37 @@ test("control client retries a temporary ACK with the same wake_id", async () =>
   await control.acknowledge("wake-1", "epoch-1", new AbortController().signal);
   assert.equal(payloads.length, 2);
   assert.deepEqual(payloads[0], payloads[1]);
+});
+
+test("control client sends a terminal blocked report with its reason", async () => {
+  const config = testConfig();
+  let payload: unknown;
+  const control = new BellControlClient({
+    ackUrl: config.ackUrl,
+    reportUrl: config.reportUrl,
+    token: config.token,
+    policy: config.policy,
+    fetchImpl: async (_input, init) => {
+      payload = JSON.parse(String(init?.body));
+      return new Response(null, { status: 204 });
+    },
+  });
+  await control.report(
+    {
+      wakeId: "wake-1",
+      connectionEpoch: "epoch-1",
+      status: "blocked",
+      reason: "timeout_exhausted",
+      errorCode: "injector_timeout",
+    },
+    new AbortController().signal,
+  );
+  assert.deepEqual(payload, {
+    version: 1,
+    wake_id: "wake-1",
+    connection_epoch: "epoch-1",
+    status: "blocked",
+    reason: "timeout_exhausted",
+    error_code: "injector_timeout",
+  });
 });

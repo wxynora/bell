@@ -3,16 +3,17 @@ import { delay } from "./delay.js";
 import { BELL_PROTOCOL_VERSION } from "./protocol.js";
 import { BellTransportError, httpError } from "./transport-error.js";
 
-export type WakeReportStatus =
-  | "busy"
-  | "retryable_error"
-  | "permanent_error"
-  | "timeout";
+export type WakeBlockReason =
+  | "busy_exhausted"
+  | "retryable_exhausted"
+  | "timeout_exhausted"
+  | "permanent_error";
 
 export interface WakeReport {
   wakeId: string;
   connectionEpoch: string;
-  status: WakeReportStatus;
+  status: "blocked";
+  reason: WakeBlockReason;
   errorCode: string;
 }
 
@@ -51,6 +52,7 @@ export class BellControlClient {
         wake_id: report.wakeId,
         connection_epoch: report.connectionEpoch,
         status: report.status,
+        reason: report.reason,
         error_code: report.errorCode,
       },
       signal,

@@ -18,9 +18,11 @@ export interface WakeLedger {
 
 export class SqliteWakeLedger implements WakeLedger {
   readonly #database: DatabaseSync;
+  readonly #acceptedRetentionMs: number;
 
-  constructor(stateDirectory: string, busyTimeoutMs: number) {
+  constructor(stateDirectory: string, busyTimeoutMs: number, acceptedRetentionDays: number) {
     mkdirSync(stateDirectory, { recursive: true, mode: 0o700 });
+    this.#acceptedRetentionMs = acceptedRetentionDays * 24 * 60 * 60 * 1000;
     const databasePath = join(stateDirectory, "bell-state.sqlite");
     this.#database = new DatabaseSync(databasePath);
     chmodSync(databasePath, 0o600);
@@ -35,6 +37,9 @@ export class SqliteWakeLedger implements WakeLedger {
       CREATE INDEX IF NOT EXISTS accepted_wakes_unacked
         ON accepted_wakes(acked_at)
         WHERE acked_at IS NULL;
+      CREATE INDEX IF NOT EXISTS accepted_wakes_acked
+        ON accepted_wakes(acked_at)
+        WHERE acked_at IS NOT NULL;
     `);
   }
 
@@ -54,9 +59,22 @@ export class SqliteWakeLedger implements WakeLedger {
   }
 
   markAcked(wakeId: string, ackedAt = new Date().toISOString()): void {
-    this.#database
-      .prepare("UPDATE accepted_wakes SET acked_at=COALESCE(acked_at, ?) WHERE wake_id=?")
-      .run(ackedAt, wakeId);
+    const ackedAtMilliseconds = Date.parse(ackedAt);
+    if (!Number.isFinite(ackedAtMilliseconds)) throw new Error("ackedAt must be a valid timestamp");
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      this.#database
+        .prepare("UPDATE accepted_wakes SET acked_at=COALESCE(acked_at, ?) WHERE wake_id=?")
+        .run(ackedAt, wakeId);
+      const cutoff = new Date(ackedAtMilliseconds - this.#acceptedRetentionMs).toISOString();
+      this.#database
+        .prepare("DELETE FROM accepted_wakes WHERE acked_at IS NOT NULL AND acked_at < ?")
+        .run(cutoff);
+      this.#database.exec("COMMIT");
+    } catch (error) {
+      this.#database.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   listUnacked(): AcceptedWakeRecord[] {

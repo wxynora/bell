@@ -25,7 +25,9 @@ function completeEnvironment(): NodeJS.ProcessEnv {
     BELL_INJECTOR_RETRY_DELAY_MS: "12",
     BELL_BUSY_RETRY_DELAY_MS: "13",
     BELL_BUSY_MAX_ATTEMPTS: "14",
+    BELL_MAX_PENDING_WAKES: "32",
     BELL_SQLITE_BUSY_TIMEOUT_MS: "15",
+    BELL_ACCEPTED_RETENTION_DAYS: "180",
     BELL_MAX_EVENT_BYTES: "16",
     BELL_MAX_WAKE_ID_CHARS: "17",
     BELL_MAX_REASON_CHARS: "18",
@@ -46,6 +48,8 @@ test("loadConfig requires every unconfirmed numeric policy explicitly", () => {
 test("loadConfig accepts HTTPS and explicit policy values", () => {
   const config = loadConfig(completeEnvironment());
   assert.equal(config.policy.injectorTimeoutMs, 9);
+  assert.equal(config.policy.maxPendingWakes, 32);
+  assert.equal(config.policy.acceptedRetentionDays, 180);
   assert.equal(config.policy.maxErrorCodeChars, 22);
   assert.deepEqual(config.injector.args, []);
 });
