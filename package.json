@@ -1,0 +1,26 @@
+{
+  "name": "bell",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Doorbell Commons local wake bridge",
+  "type": "module",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "engines": {
+    "node": ">=24",
+    "npm": ">=11"
+  },
+  "bin": {
+    "bell": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "check": "npm run typecheck && npm test && npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "tsx": "4.23.1",
+    "typescript": "6.0.3"
+  }
+}

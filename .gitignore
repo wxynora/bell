@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.test-dist/
+.env
+*.log
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.lock
+.DS_Store

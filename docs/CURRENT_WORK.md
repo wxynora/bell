@@ -1,0 +1,9 @@
+# Bell Current Work
+
+> `BUILD-BELL-LOCAL-BRIDGE-20260811`：模式 `施工`，状态为本地首版已完成。已实现认证 SSE、`connection_epoch` fencing、connected／wake／cancel 校验、有限重连、串行 injector、结构化结果与 timeout 终止、本地进程锁、SQLite accepted／unacked 账本、queued／in-progress 去重、先落账本后 ACK、独立失败报告、CLI、配置示例和使用文档。所有未确认 timeout、重试、退避和大小数值仍为显式必填配置。`npm run check` 已通过 TypeScript 检查、19 项隔离测试和构建；`dist/cli.js --version`／`--help` 已通过。没有连接真实 SSE、网关、农场或模型，没有创建远程、commit 或 push。许可证已经按辛玥要求设为 PolyForm Noncommercial License 1.0.0，禁止商业使用。
+
+> `LICENSE-BELL-NONCOMMERCIAL-20260811`：模式 `施工`，状态为已完成。已使用 PolyForm Project 官方 1.0.0 标签原文新增 `LICENSE`，把 `package.json` 的 SPDX 标识改为 `PolyForm-Noncommercial-1.0.0`，并在 README 明确允许非商业使用／修改／分发、禁止商业使用，商业使用须另行取得授权。未改运行代码、协议、测试、Git 远端或生产。
+
+> `AUDIT-BELL-PRE-REPOSITORY-20260813`：模式 `施工`，状态为已完成。已修复两项建仓阻塞问题：`src/sse/client.ts` 的 connect timeout 现在一直覆盖到合法 `connected` 握手，握手完成后才切换并按后续流量刷新 idle timeout，持续心跳或未知事件不能无限拖住 `bell check`；`src/runner.ts` 的重连次数和退避现在只累计连续短命连接，连接稳定满一个已经显式配置的 `streamIdleTimeoutMs` 窗口后重置，不新增隐式时间参数，也不让 connected 后立即 EOF 绕过有限预算。`tests/{network,runner}.test.ts` 已新增两项原问题回归，`README.md` 和 `docs/DEBUG_INDEX.md` 已同步真实行为。定向回归 6/6 通过；本机 Node.js 25.8.2 下 `npm run check` 通过 TypeScript 检查、21/21 隔离测试和构建，CLI version／help 与七个本任务改动文件的无尾随空白检查通过；最低支持版本 Node.js 24.19.0 下同一组 21/21 测试及构建后的 CLI version 通过。没有修改协议字段、token、injector、许可证、依赖、Git index／历史／远端，也没有连接真实 Doorbell、Garden、网关、农场、injector 或模型。当前本地版本可以创建 GitHub 仓库；真实服务端、首户 injector 和模型链路仍属于后续集成测试，不得描述为已经上线。
+
+> `PUBLISH-BELL-GITHUB-20260813`：模式 `施工`，状态为首次发布中。辛玥已授权把当前已验收的完整 Bell 首版绑定到 `git@github.com:wxynora/bell.git`，提交并推送 `main`；同时删除 README 中“尚未连接 GitHub 远端”的过期描述。精确写入范围为本任务状态行、README 该句、Bell 仓库 Git remote／index／首次 commit 和 `origin/main`；不修改运行协议、源码、测试、依赖或许可证，不部署、不配置生产参数，也不连接真实服务。
