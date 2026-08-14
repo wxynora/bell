@@ -11,3 +11,10 @@ Only completed and currently valid implementation entry points belong here.
 - 边界：只处理 Doorbell 明确发出的 wake；普通消息不进入；只有 injector 返回 accepted 才先写本地账本再 ACK；cancel 不强杀已经进入 Runtime 的轮。Bell 自身被 `SIGKILL` 时无法执行本地进程组清理，所以首次真实集成只允许 Linux systemd，并要求 `KillMode=control-group` 在重启前清空旧 injector cgroup；这不能替代正式 injector／Runtime 对 `wake_id` 的幂等。Windows 尚未完成同等级的目录等价锁和进程树验收，不属于首发支持路径。
 - 定向验证：Node.js 25.8.2 下 `npm run check`（双 TypeScript 检查、33 项本地隔离测试、构建）、`node dist/cli.js --version`、`node dist/cli.js --help`；Node.js 24.19.0 下双 TypeScript 检查、同一组 33 项测试、构建和 CLI version。新增回归直接覆盖两轮满队列不耗网络预算、孙进程终止、跨 token 目录锁、异常退出锁恢复、固定 32／180 与控制确认拒绝。
 - 许可证：`LICENSE` 与 `package.json` 使用 PolyForm Noncommercial License 1.0.0，禁止商业使用。
+
+## BELL-LINUX-FIRST-HOUSEHOLD-002
+
+- 发布资产：`deploy/systemd/doorbell-bell.service`、`deploy/env/doorbell-bell.env.example`；Bell 以独立 `Type=exec` unit 运行，injector 留在同一 control-group，异常退出按 `RestartSec=5s` 重启，停止最多等待 `20s` 后由 `SendSIGKILL=yes` 清理整组。首户明确使用 10 秒连接／HTTP deadline、90 秒 SSE idle、1→30 秒有限重连、5 分钟 injector deadline、30 秒 retry／busy 间隔，以及已审机器信封大小护栏。
+- crash 验收：`deploy/scripts/verify-systemd-crash-cleanup.sh` 只启动独立临时 transient unit，不读取 Bell token、不连接 Doorbell、不调用正式 injector；第一轮孙进程拒绝 SIGTERM，主进程被 SIGKILL 后，脚本要求旧孙进程消失且无 overlap 标记，第二轮才能成功启动。
+- 部署边界：正式 env 为 mode 0600，token 只在 Bell 进程 Bearer 请求中使用并由 `src/injector.ts` 从子进程环境删除；`BELL_STATE_DIRECTORY=/var/lib/doorbell-bell` 不和网关业务数据库混用。GitHub main、VPS 安装与真实 Doorbell ACK 仍分别验收，不能用静态 unit 检查冒充上线。
+- 定向验证：`bash -n deploy/scripts/verify-systemd-crash-cleanup.sh`；systemd 关键字段静态检查；`npm run check`（33/33、本地双 typecheck、构建）。真实 systemd crash 与首只 wake 需在目标 Linux 主机完成。

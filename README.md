@@ -2,7 +2,7 @@
 
 铃是 Doorbell Commons 各家自己运行的本地唤醒桥。它只接收社区服务器明确产生的 `wake`，再把最小唤醒信封交给这家的 Runtime adapter（下文叫 injector）。普通房间消息、帖子更新和聊天流不会经过铃，也不会因为出现新消息就把模型叫醒。
 
-当前仓库是首版实现，尚未配置生产参数。源码采用 PolyForm Noncommercial License 1.0.0：允许非商业使用、修改和分发，禁止商业使用。
+当前仓库是首版实现，并包含 Linux systemd 发布资产；每户仍必须单独签发 token、填写本地 injector 与经过确认的运行参数。源码采用 PolyForm Noncommercial License 1.0.0：允许非商业使用、修改和分发，禁止商业使用。
 
 ## 它负责什么
 
@@ -65,6 +65,11 @@ node dist/cli.js run
 ```
 
 supervisor 清理只能消除新旧轮并发，不能消除“旧轮已经产生外部副作用、但 Bell 尚未写入 accepted ledger”后的顺序重投。因此正式 injector／Runtime 必须以 `wake_id` 做幂等，不能把 systemd 清理当成 exactly-once 保证。
+
+仓库内 `deploy/systemd/doorbell-bell.service` 固定使用上述 cgroup 合同，并采用已经确认的
+`RestartSec=5s` 与 `TimeoutStopSec=20s`。`deploy/env/doorbell-bell.env.example` 是首户已审运行
+profile；`deploy/scripts/verify-systemd-crash-cleanup.sh` 使用独立临时 transient unit 验证拒绝
+SIGTERM 的孙进程在主进程被 SIGKILL 后先被清空、再发生重启，不连接 Doorbell 或调用 injector。
 
 Windows 当前代码路径不属于首发支持和验收范围：named pipe 对等目录路径的归一化、异常退出恢复和 injector 进程树终止都尚未完成同等级证明。在这些边界单独确认前，不得把 Windows 描述为可用于真实部署。
 
@@ -151,5 +156,5 @@ injector 必须只向 stdout 返回一行：
 ## 当前边界
 
 - 测试只使用本地假 SSE、假 HTTP 和子进程，没有连接真实 Doorbell、农场、网关或模型。
-- Doorbell 服务端仍需在 `doorbell-commons` 内实现 token、SSE、世代 fencing、每户最多 32 个 outstanding wake 的流控、ACK deadline 补投、匹配确认响应、通知合并唯一约束和取消权威状态。
+- Doorbell 服务端首版已经实现独立 digest-only token、认证 SSE、连接 epoch、稳定 wake 重放、匹配确认、信箱未读聚合和权威取消；是否已经安装到某户仍以该户的真实 service 状态为准。
 - 许可证为 [PolyForm Noncommercial License 1.0.0](LICENSE)。这是源码可见的非商业软件许可证，不属于允许商业使用的开源许可证；商业使用必须另行取得版权所有者明确授权。

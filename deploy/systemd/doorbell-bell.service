@@ -1,0 +1,28 @@
+[Unit]
+Description=Doorbell Commons household Bell bridge
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=6
+
+[Service]
+Type=exec
+User=root
+Group=root
+WorkingDirectory=/opt/bell
+EnvironmentFile=/etc/doorbell-bell.env
+ExecStart=/usr/bin/node /opt/bell/dist/cli.js run
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=20s
+KillSignal=SIGTERM
+KillMode=control-group
+SendSIGKILL=yes
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/doorbell-bell
+
+[Install]
+WantedBy=multi-user.target
