@@ -1,66 +1,104 @@
-import { createHash, randomUUID } from "node:crypto";
-import { closeSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { chmod, mkdir, unlink } from "node:fs/promises";
+import { createConnection, createServer, type Server } from "node:net";
 import { join } from "node:path";
 
 export class BellAlreadyRunningError extends Error {
   constructor() {
-    super("Bell is already running for this token and state directory");
+    super("Bell is already running for this state directory");
     this.name = "BellAlreadyRunningError";
   }
 }
 
 export interface ProcessLock {
   readonly path: string;
-  release(): void;
+  release(): Promise<void>;
 }
 
-export function tokenFingerprint(token: string): string {
-  return createHash("sha256").update(token).digest("hex");
+function lockAddress(stateDirectory: string): string {
+  if (process.platform === "win32") {
+    const fingerprint = createHash("sha256").update(stateDirectory).digest("hex");
+    return `\\\\.\\pipe\\bell-${fingerprint}`;
+  }
+  return join(stateDirectory, "bell.lock.sock");
 }
 
-export function acquireProcessLock(stateDirectory: string, token: string): ProcessLock {
-  mkdirSync(stateDirectory, { recursive: true, mode: 0o700 });
-  const lockPath = join(stateDirectory, `bell-${tokenFingerprint(token)}.lock`);
-  const nonce = randomUUID();
-  let descriptor: number;
-  try {
-    descriptor = openSync(lockPath, "wx", 0o600);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-      throw new BellAlreadyRunningError();
-    }
-    throw error;
-  }
-  try {
-    try {
-      writeFileSync(
-        descriptor,
-        JSON.stringify({ version: 1, pid: process.pid, nonce, started_at: new Date().toISOString() }),
-        "utf8",
-      );
-    } finally {
-      closeSync(descriptor);
-    }
-  } catch (error) {
-    try {
-      unlinkSync(lockPath);
-    } catch (unlinkError) {
-      if ((unlinkError as NodeJS.ErrnoException).code !== "ENOENT") throw unlinkError;
-    }
-    throw error;
-  }
-  let released = false;
-  return {
-    path: lockPath,
-    release: () => {
-      if (released) return;
-      released = true;
-      try {
-        const current = JSON.parse(readFileSync(lockPath, "utf8")) as { nonce?: unknown };
-        if (current.nonce === nonce) unlinkSync(lockPath);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+function listen(server: Server, path: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const onError = (error: Error): void => {
+      server.off("listening", onListening);
+      reject(error);
+    };
+    const onListening = (): void => {
+      server.off("error", onError);
+      resolve();
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(path);
+  });
+}
+
+function probe(path: string): Promise<boolean> {
+  return new Promise<boolean>((resolve, reject) => {
+    const socket = createConnection(path);
+    socket.once("connect", () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.once("error", (error: NodeJS.ErrnoException) => {
+      socket.destroy();
+      if (error.code === "ECONNREFUSED" || error.code === "ENOENT") {
+        resolve(false);
+        return;
       }
-    },
-  };
+      reject(error);
+    });
+  });
+}
+
+async function removeStaleSocket(path: string): Promise<void> {
+  try {
+    await unlink(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
+
+function close(server: Server): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+}
+
+export async function acquireProcessLock(stateDirectory: string): Promise<ProcessLock> {
+  await mkdir(stateDirectory, { recursive: true, mode: 0o700 });
+  const path = lockAddress(stateDirectory);
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const server = createServer((socket) => socket.destroy());
+    try {
+      await listen(server, path);
+      if (process.platform !== "win32") await chmod(path, 0o600);
+      let released = false;
+      return {
+        path,
+        release: async () => {
+          if (released) return;
+          released = true;
+          await close(server);
+        },
+      };
+    } catch (error) {
+      if (server.listening) await close(server);
+      if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE") throw error;
+      if (await probe(path)) throw new BellAlreadyRunningError();
+      if (process.platform !== "win32") await removeStaleSocket(path);
+    }
+  }
+
+  throw new BellAlreadyRunningError();
 }

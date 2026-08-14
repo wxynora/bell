@@ -15,10 +15,10 @@ Doorbell 服务器
 ```
 
 - token 只用于 Bearer 请求头，不进入 URL、日志、injector 环境或模型消息。
-- 一次只运行一个 injector；同机进程锁防止相同 token 的两个铃同时投递。
+- 一次只运行一个 injector；同一 `BELL_STATE_DIRECTORY` 的进程锁防止 token 换发窗口中两个铃同时投递。
 - `wake_id` 已经在本地记为 accepted 时，重投只补 ACK，不重复调用 Runtime。
 - injector 的 busy、临时失败、超时和永久失败分别处理；只有 accepted 才能 ACK。其余结果在本地预算耗尽或确认永久失败后只报告终结性的 `blocked`，服务端确认失败就停止 Bell。
-- 每户最多同时保留 32 个不同 wake（active＋queued）。第 33 个不会入队、丢弃或 ACK；铃会断开 SSE，排空已经接收的项目，再由服务端补投原 `wake_id`。
+- 每户最多同时保留 32 个不同 wake（active＋queued）。第 33 个不会入队、丢弃或 ACK；铃会断开 SSE，排空已经接收的项目，再由服务端补投原 `wake_id`。这种本地背压断流不消耗网络故障的重连预算。
 - SSE 断开只做带抖动的有限重连；连续的短命连接共用一份重连预算，连接稳定满一个已配置的 idle timeout 窗口后重置预算和退避；鉴权、协议和永久配置错误立即停止。
 - `cancel` 可以丢弃尚未开始的队列项，不能伪装撤回已经进入 injector 的一轮。
 
@@ -46,7 +46,7 @@ node dist/cli.js check
 node dist/cli.js run
 ```
 
-铃只读取进程环境，不自动加载 `.env` 文件。变量清单见 [`.env.example`](.env.example)。超时、重试、退避和大小限制都必须显式填写；已确认的 `BELL_MAX_PENDING_WAKES=32` 与 `BELL_ACCEPTED_RETENTION_DAYS=180` 已写入示例。
+铃只读取进程环境，不自动加载 `.env` 文件。变量清单见 [`.env.example`](.env.example)。超时、重试、退避和大小限制都必须显式填写；`BELL_MAX_PENDING_WAKES` 只能是 `32`，`BELL_ACCEPTED_RETENTION_DAYS` 只能是 `180`，其他值会在启动前被拒绝。
 
 ## SSE 协议骨架
 
@@ -66,6 +66,8 @@ data: {"version":1,"connection_epoch":"<current-epoch>","wake_id":"<stable-id>",
 
 `cancel` 只携带 `version`、`connection_epoch` 和 `wake_id`。SSE comment 只算客户端收到了一次心跳，不触发 injector，也不证明模型或业务健康。
 
+Doorbell 对每户最多只能同时保留 32 个已经发给 Bell、但尚未由 ACK、`blocked` 或权威 `cancel` 终结的不同 wake。只有一个名额完成终结后才能继续发送下一项；Bell 的本地 32 上限仍作为服务端违约或异常流量的最后防线。
+
 ACK 和失败报告分别 POST 到配置的地址，并带同一 Bearer token。ACK 正文为：
 
 ```json
@@ -78,7 +80,19 @@ ACK 和失败报告分别 POST 到配置的地址，并带同一 Bearer token。
 {"version":1,"wake_id":"<stable-id>","connection_epoch":"<current-epoch>","status":"blocked","reason":"busy_exhausted | retryable_exhausted | timeout_exhausted | permanent_error","error_code":"<safe-code>"}
 ```
 
-服务端只有在原子地把该 delivery 转为 `blocked` 并停止自动重投后才能返回成功；报告未获确认时，铃停止消费，不能让同一 wake 获得新一轮本地预算。服务端路径由环境变量提供，仓库不假定 Doorbell 的部署域名。
+ACK 只有在服务端持久确认对应 wake 后，才能返回 `HTTP 200`、`Content-Type: application/json` 和以下精确确认：
+
+```json
+{"version":1,"wake_id":"<same-stable-id>","status":"acked"}
+```
+
+失败报告只有在服务端原子地把该 delivery 转为 `blocked` 并停止自动重投后，才能返回同样的 HTTP 和媒体类型以及：
+
+```json
+{"version":1,"wake_id":"<same-stable-id>","status":"blocked"}
+```
+
+其他 2xx、空响应、非 JSON、额外字段、错误版本、错误 `wake_id` 或错误状态都不算成功。报告未获匹配确认时，铃停止消费，不能让同一 wake 获得新一轮本地预算。服务端路径由环境变量提供，仓库不假定 Doorbell 的部署域名。
 
 ## injector 合同
 
@@ -99,14 +113,16 @@ injector 必须只向 stdout 返回一行：
 
 `accepted` 必须以退出码 `0` 结束，其他状态必须为非零退出码。无输出、额外行、非法 JSON、未知版本、状态与退出码矛盾以及不安全的 `error_code` 都会视为永久协议错误，并且不会 ACK。
 
+在 Linux 和 macOS 上，每次 injector 都运行在独立进程组；timeout、输出超限或 Bell 停止时会先向整个组发送 `SIGTERM`，等待已经配置的 kill grace 后再向整个组发送 `SIGKILL`，下一轮不会只因为直接子进程先退出就越过旧的 Runtime 子进程。Windows 没有 POSIX 进程组，Windows injector 必须自行保证直接进程退出时其全部子进程同时结束；在对应 adapter 测试完成前不得把 Windows 描述为具备同等进程树终止保证。
+
 ## 本地状态与恢复
 
 `BELL_STATE_DIRECTORY` 内保存：
 
 - `bell-state.sqlite`：已经被正确 Runtime 接受的 `wake_id`；
-- `bell-<fingerprint>.lock`：同机独占进程锁。
+- `bell.lock.sock`：Linux／macOS 上由当前 Bell 进程持有的目录级本地 socket 锁；Windows 使用同一目录指纹对应的本地 named pipe。
 
-异常断电可能留下锁文件。只有在确认旧 Bell 进程已经不存在后才可人工移除；程序不会靠猜 PID 自动抢锁。不要在两台机器复制同一 token；这种情况应当在 Doorbell 撤销旧 token 并换发。
+一个状态目录只属于一个 Bell 实例，token 换发后继续复用这份 ledger 和同一把目录锁。进程正常退出时 socket 由运行时关闭；异常断电留下 socket 路径时，新 Bell 会先通过本地连接确认是否仍有真实持有者，只在连接已经明确拒绝时清理残留并重新取得锁。不要在两台机器复制同一 token；这种情况应当在 Doorbell 撤销旧 token 并换发。
 
 投递语义是至少一次，不是绝对 exactly-once。Runtime 已接受、但铃还没来得及写本地账本就崩溃的极小窗口仍可能重复唤醒，因此 injector 和 Runtime 如果能做幂等，也应继续使用 `wake_id`。
 
@@ -115,5 +131,5 @@ injector 必须只向 stdout 返回一行：
 ## 当前边界
 
 - 测试只使用本地假 SSE、假 HTTP 和子进程，没有连接真实 Doorbell、农场、网关或模型。
-- Doorbell 服务端仍需在 `doorbell-commons` 内实现 token、SSE、世代 fencing、ACK deadline 补投、通知合并唯一约束和取消权威状态。
+- Doorbell 服务端仍需在 `doorbell-commons` 内实现 token、SSE、世代 fencing、每户最多 32 个 outstanding wake 的流控、ACK deadline 补投、匹配确认响应、通知合并唯一约束和取消权威状态。
 - 许可证为 [PolyForm Noncommercial License 1.0.0](LICENSE)。这是源码可见的非商业软件许可证，不属于允许商业使用的开源许可证；商业使用必须另行取得版权所有者明确授权。

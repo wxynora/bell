@@ -103,7 +103,7 @@ export class BellDispatcher {
     }
     const pendingWakeCount = this.#queue.length + (this.#active === undefined ? 0 : 1);
     if (pendingWakeCount >= this.#options.policy.maxPendingWakes) {
-      throw new BellTransportError("local wake queue capacity reached", "retryable");
+      throw new BellTransportError("local wake queue capacity reached", "backpressure");
     }
     const item: QueueItem = {
       wake,

@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { runInjector } from "../src/injector.js";
 import type { WakeEvent } from "../src/protocol.js";
@@ -73,4 +76,55 @@ test("injector timeout waits for the old process to be killed before returning",
     new AbortController().signal,
   );
   assert.deepEqual(result, { status: "timeout", errorCode: "injector_timeout" });
+});
+
+test("injector timeout terminates the injector's whole POSIX process group", async (context) => {
+  if (process.platform === "win32") {
+    context.skip("POSIX process groups are not available on Windows");
+    return;
+  }
+
+  const directory = mkdtempSync(join(tmpdir(), "bell-injector-tree-"));
+  const pidPath = join(directory, "grandchild.pid");
+  let grandchildPid: number | undefined;
+  try {
+    const config = testConfig();
+    const grandchildSource = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)";
+    const injectorSource = `
+      const { spawn } = require("node:child_process");
+      const { writeFileSync } = require("node:fs");
+      const child = spawn(process.execPath, ["-e", ${JSON.stringify(grandchildSource)}], { stdio: "ignore" });
+      writeFileSync(${JSON.stringify(pidPath)}, String(child.pid));
+      process.on("SIGTERM", () => {});
+      setInterval(() => {}, 1000);
+    `;
+    const result = await runInjector(
+      {
+        injector: { executable: process.execPath, args: ["-e", injectorSource] },
+        policy: {
+          ...config.policy,
+          injectorTimeoutMs: 100,
+          injectorKillGraceMs: 20,
+        },
+      },
+      wake,
+      new AbortController().signal,
+    );
+    const pid = Number(readFileSync(pidPath, "utf8"));
+    grandchildPid = pid;
+    assert.deepEqual(result, { status: "timeout", errorCode: "injector_timeout" });
+    assert.throws(
+      () => process.kill(pid, 0),
+      (error: unknown) => (error as NodeJS.ErrnoException).code === "ESRCH",
+    );
+  } finally {
+    if (grandchildPid !== undefined) {
+      try {
+        process.kill(grandchildPid, "SIGKILL");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      }
+    }
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

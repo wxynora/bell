@@ -77,6 +77,14 @@ function positiveInteger(env: NodeJS.ProcessEnv, name: string): number {
   return value;
 }
 
+function fixedPositiveInteger(env: NodeJS.ProcessEnv, name: string, expected: number): number {
+  const value = positiveInteger(env, name);
+  if (value !== expected) {
+    throw new BellConfigError(`${name} must be ${expected}`);
+  }
+  return value;
+}
+
 function ratio(env: NodeJS.ProcessEnv, name: string): number {
   const raw = requiredText(env, name);
   const value = Number(raw);
@@ -152,9 +160,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BellConfig {
     injectorRetryDelayMs: positiveInteger(env, "BELL_INJECTOR_RETRY_DELAY_MS"),
     busyRetryDelayMs: positiveInteger(env, "BELL_BUSY_RETRY_DELAY_MS"),
     busyMaxAttempts: positiveInteger(env, "BELL_BUSY_MAX_ATTEMPTS"),
-    maxPendingWakes: positiveInteger(env, "BELL_MAX_PENDING_WAKES"),
+    maxPendingWakes: fixedPositiveInteger(env, "BELL_MAX_PENDING_WAKES", 32),
     sqliteBusyTimeoutMs: positiveInteger(env, "BELL_SQLITE_BUSY_TIMEOUT_MS"),
-    acceptedRetentionDays: positiveInteger(env, "BELL_ACCEPTED_RETENTION_DAYS"),
+    acceptedRetentionDays: fixedPositiveInteger(env, "BELL_ACCEPTED_RETENTION_DAYS", 180),
     maxEventBytes: positiveInteger(env, "BELL_MAX_EVENT_BYTES"),
     maxWakeIdChars: positiveInteger(env, "BELL_MAX_WAKE_ID_CHARS"),
     maxReasonChars: positiveInteger(env, "BELL_MAX_REASON_CHARS"),

@@ -1,4 +1,9 @@
-export type TransportErrorKind = "retryable" | "rate_limited" | "permanent" | "protocol";
+export type TransportErrorKind =
+  | "retryable"
+  | "rate_limited"
+  | "backpressure"
+  | "permanent"
+  | "protocol";
 
 export class BellTransportError extends Error {
   readonly kind: TransportErrorKind;

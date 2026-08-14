@@ -29,7 +29,7 @@ export async function runBell(
   config: BellConfig,
   dependencies: BellRuntimeDependencies,
 ): Promise<void> {
-  const processLock = acquireProcessLock(config.stateDirectory, config.token);
+  const processLock = await acquireProcessLock(config.stateDirectory);
   let ledger: SqliteWakeLedger | undefined;
   let sessionController: AbortController | undefined;
   try {
@@ -94,9 +94,13 @@ export async function runBell(
       await dispatcher.waitForIdle();
       if (dependencies.signal.aborted) return;
       if (dispatcher.fatalError !== undefined) throw dispatcher.fatalError;
+      const locallyBackpressured =
+        streamError instanceof BellTransportError && streamError.kind === "backpressure";
       if (
         !(streamError instanceof BellTransportError) ||
-        (streamError.kind !== "retryable" && streamError.kind !== "rate_limited")
+        (streamError.kind !== "retryable" &&
+          streamError.kind !== "rate_limited" &&
+          !locallyBackpressured)
       ) {
         throw streamError;
       }
@@ -108,6 +112,13 @@ export async function runBell(
         reconnects = 0;
         backoffMs = config.policy.reconnectInitialMs;
         dependencies.logger.info("stable SSE session reset the consecutive reconnect budget");
+      }
+      if (locallyBackpressured) {
+        dependencies.logger.warn("local wake queue drained; reconnecting without spending network budget", {
+          wait_ms: config.policy.reconnectInitialMs,
+        });
+        await delay(config.policy.reconnectInitialMs, dependencies.signal);
+        continue;
       }
       if (reconnects >= config.policy.reconnectMaxAttempts) {
         throw new BellTransportError("SSE reconnect budget exhausted", "permanent", {
@@ -133,7 +144,7 @@ export async function runBell(
   } finally {
     sessionController?.abort();
     ledger?.close();
-    processLock.release();
+    await processLock.release();
   }
 }
 
@@ -141,7 +152,7 @@ export async function checkBellConnection(
   config: BellConfig,
   dependencies: Pick<BellRuntimeDependencies, "logger" | "signal" | "fetchImpl">,
 ): Promise<void> {
-  const processLock = acquireProcessLock(config.stateDirectory, config.token);
+  const processLock = await acquireProcessLock(config.stateDirectory);
   try {
     const result = await consumeBellStream({
       url: config.streamUrl,
@@ -158,6 +169,6 @@ export async function checkBellConnection(
       connection_epoch_present: result.connectionEpoch.length > 0,
     });
   } finally {
-    processLock.release();
+    await processLock.release();
   }
 }

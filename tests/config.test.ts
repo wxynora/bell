@@ -54,6 +54,19 @@ test("loadConfig accepts HTTPS and explicit policy values", () => {
   assert.deepEqual(config.injector.args, []);
 });
 
+test("loadConfig enforces the fixed pending and accepted-retention contracts", () => {
+  const pendingEnvironment = completeEnvironment();
+  pendingEnvironment.BELL_MAX_PENDING_WAKES = "31";
+  assert.throws(() => loadConfig(pendingEnvironment), /BELL_MAX_PENDING_WAKES must be 32/u);
+
+  const retentionEnvironment = completeEnvironment();
+  retentionEnvironment.BELL_ACCEPTED_RETENTION_DAYS = "181";
+  assert.throws(
+    () => loadConfig(retentionEnvironment),
+    /BELL_ACCEPTED_RETENTION_DAYS must be 180/u,
+  );
+});
+
 test("loadConfig rejects cleartext non-loopback endpoints", () => {
   const environment = completeEnvironment();
   environment.BELL_STREAM_URL = "http://community.example.invalid/wake/stream";

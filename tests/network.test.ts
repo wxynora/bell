@@ -9,6 +9,13 @@ function eventStream(text: string): Response {
   return new Response(text, { headers: { "content-type": "text/event-stream; charset=utf-8" } });
 }
 
+function controlConfirmation(wakeId: string, status: "acked" | "blocked"): Response {
+  return new Response(JSON.stringify({ version: 1, wake_id: wakeId, status }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
 test("SSE client sends token only in Authorization and accepts the connected handshake", async () => {
   const config = testConfig();
   let authorization: string | null = null;
@@ -114,7 +121,7 @@ test("SSE stops parsing the current chunk when delivery applies backpressure", a
         if (event.kind !== "wake") return;
         wakeCount += 1;
         if (wakeCount === 3) {
-          throw new BellTransportError("local wake queue capacity reached", "retryable");
+          throw new BellTransportError("local wake queue capacity reached", "backpressure");
         }
       },
       fetchImpl: async () =>
@@ -137,7 +144,9 @@ test("SSE stops parsing the current chunk when delivery applies backpressure", a
         ),
     }),
     (error: unknown) =>
-      error instanceof BellTransportError && error.message === "local wake queue capacity reached",
+      error instanceof BellTransportError &&
+      error.kind === "backpressure" &&
+      error.message === "local wake queue capacity reached",
   );
   assert.equal(wakeCount, 3);
 });
@@ -152,7 +161,9 @@ test("control client retries a temporary ACK with the same wake_id", async () =>
     policy: config.policy,
     fetchImpl: async (_input, init) => {
       payloads.push(JSON.parse(String(init?.body)));
-      return payloads.length === 1 ? new Response(null, { status: 503 }) : new Response(null, { status: 204 });
+      return payloads.length === 1
+        ? new Response(null, { status: 503 })
+        : controlConfirmation("wake-1", "acked");
     },
   });
   await control.acknowledge("wake-1", "epoch-1", new AbortController().signal);
@@ -170,7 +181,7 @@ test("control client sends a terminal blocked report with its reason", async () 
     policy: config.policy,
     fetchImpl: async (_input, init) => {
       payload = JSON.parse(String(init?.body));
-      return new Response(null, { status: 204 });
+      return controlConfirmation("wake-1", "blocked");
     },
   });
   await control.report(
@@ -191,4 +202,26 @@ test("control client sends a terminal blocked report with its reason", async () 
     reason: "timeout_exhausted",
     error_code: "injector_timeout",
   });
+});
+
+test("control client rejects generic 2xx and mismatched confirmations", async () => {
+  const config = testConfig();
+  const responses = [
+    new Response(null, { status: 204 }),
+    controlConfirmation("another-wake", "acked"),
+  ];
+
+  for (const response of responses) {
+    const control = new BellControlClient({
+      ackUrl: config.ackUrl,
+      reportUrl: config.reportUrl,
+      token: config.token,
+      policy: config.policy,
+      fetchImpl: async () => response.clone(),
+    });
+    await assert.rejects(
+      control.acknowledge("wake-1", "epoch-1", new AbortController().signal),
+      (error: unknown) => error instanceof BellTransportError && error.kind === "protocol",
+    );
+  }
 });

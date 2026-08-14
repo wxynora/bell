@@ -26,14 +26,32 @@ function localFailure(errorCode: string, permanent: boolean): InjectorOutcome {
     : { status: "retryable_error", errorCode };
 }
 
-function terminate(child: ChildProcessWithoutNullStreams, graceMs: number): NodeJS.Timeout | undefined {
-  if (child.exitCode !== null || child.signalCode !== null) return undefined;
-  child.kill("SIGTERM");
-  const timer = setTimeout(() => {
-    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-  }, graceMs);
-  timer.unref?.();
-  return timer;
+function signalProcessTree(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
+  if (process.platform !== "win32" && child.pid !== undefined) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+      throw error;
+    }
+  }
+  if (child.exitCode === null && child.signalCode === null) child.kill(signal);
+}
+
+async function terminate(child: ChildProcessWithoutNullStreams, graceMs: number): Promise<void> {
+  signalProcessTree(child, "SIGTERM");
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      try {
+        signalProcessTree(child, "SIGKILL");
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
+    }, graceMs);
+    timer.unref?.();
+  });
 }
 
 function parseOutput(stdout: string, exitCode: number | null, maxErrorCodeChars: number): InjectorOutcome {
@@ -97,6 +115,7 @@ export async function runInjector(
         ? { cwd: options.injector.workingDirectory }
         : {}),
       env: childEnvironment,
+      detached: process.platform !== "win32",
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -113,14 +132,13 @@ export async function runInjector(
     let stdoutBytes = 0;
     let outputExceeded = false;
     let timedOut = false;
-    let killTimer: NodeJS.Timeout | undefined;
+    let killPromise: Promise<void> | undefined;
     let settled = false;
     let timeoutTimer: NodeJS.Timeout | undefined;
     const finish = (outcome: InjectorOutcome): void => {
       if (settled) return;
       settled = true;
       if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
-      if (killTimer !== undefined) clearTimeout(killTimer);
       signal.removeEventListener("abort", onAbort);
       resolve(outcome);
     };
@@ -128,17 +146,19 @@ export async function runInjector(
       if (settled) return;
       settled = true;
       if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
-      if (killTimer !== undefined) clearTimeout(killTimer);
       signal.removeEventListener("abort", onAbort);
       reject(error);
     };
-    const stop = (): void => {
-      killTimer ??= terminate(child, options.policy.injectorKillGraceMs);
+    const stop = (): Promise<void> => {
+      killPromise ??= terminate(child, options.policy.injectorKillGraceMs);
+      return killPromise;
     };
-    const onAbort = (): void => stop();
+    const onAbort = (): void => {
+      void stop().catch(fail);
+    };
     timeoutTimer = setTimeout(() => {
       timedOut = true;
-      stop();
+      void stop().catch(fail);
     }, options.policy.injectorTimeoutMs);
     timeoutTimer.unref?.();
     signal.addEventListener("abort", onAbort, { once: true });
@@ -147,7 +167,7 @@ export async function runInjector(
       stdoutBytes += chunk.byteLength;
       if (stdoutBytes > options.policy.maxInjectorOutputBytes) {
         outputExceeded = true;
-        stop();
+        void stop().catch(fail);
         return;
       }
       stdout += chunk.toString("utf8");
@@ -164,19 +184,28 @@ export async function runInjector(
       );
     });
     child.on("close", (exitCode) => {
-      if (signal.aborted) {
-        fail(signal.reason);
-        return;
-      }
-      if (timedOut) {
-        finish({ status: "timeout", errorCode: "injector_timeout" });
-        return;
-      }
-      if (outputExceeded) {
-        finish(localFailure("injector_output_limit", true));
-        return;
-      }
-      finish(parseOutput(stdout, exitCode, options.policy.maxErrorCodeChars));
+      void (async () => {
+        try {
+          if (signal.aborted) {
+            await stop();
+            fail(signal.reason);
+            return;
+          }
+          if (timedOut) {
+            await stop();
+            finish({ status: "timeout", errorCode: "injector_timeout" });
+            return;
+          }
+          if (outputExceeded) {
+            await stop();
+            finish(localFailure("injector_output_limit", true));
+            return;
+          }
+          finish(parseOutput(stdout, exitCode, options.policy.maxErrorCodeChars));
+        } catch (error) {
+          fail(error);
+        }
+      })();
     });
 
     child.stdin.on("error", () => {
