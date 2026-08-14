@@ -48,6 +48,26 @@ node dist/cli.js run
 
 铃只读取进程环境，不自动加载 `.env` 文件。变量清单见 [`.env.example`](.env.example)。超时、重试、退避和大小限制都必须显式填写；`BELL_MAX_PENDING_WAKES` 只能是 `32`，`BELL_ACCEPTED_RETENTION_DAYS` 只能是 `180`，其他值会在启动前被拒绝。
 
+## 首次部署与 crash 清理合同
+
+首次真实端到端集成只验收 Linux 与 systemd。Bell 必须作为一个独立 service unit 的主进程运行，且 injector 及其全部后代必须留在同一 unit cgroup；injector 不得自行迁移到另一个 scope、service、容器或 cgroup。unit 必须显式使用 `Type=exec`、`KillMode=control-group`、`SendSIGKILL=yes` 和 `Restart=on-failure`。`RestartSec` 与 `TimeoutStopSec` 的具体值必须在首次部署评审时明确填写，仓库不代填隐式数值。
+
+这项合同负责 Bell 主进程被 `SIGKILL`、崩溃或异常退出后的并发边界：systemd 必须先终止旧 unit cgroup 中仍存活的 injector／Runtime 后代，再启动新的 Bell。若 supervisor 不能提供并验证这一顺序，就不得为真实 Doorbell 连接启用自动重启。
+
+首次集成必须完成以下 crash 验收，不能只检查 unit 文件文字：
+
+```text
+为 wake X 启动会继续运行且拒绝 SIGTERM 的 injector 孙进程
+→ SIGKILL Bell 主进程
+→ 确认旧 injector、孙进程和旧 unit cgroup 已全部消失
+→ 确认新 Bell 此后才启动
+→ 允许 Doorbell 重投 wake X，并确认新旧两轮没有同时存在
+```
+
+supervisor 清理只能消除新旧轮并发，不能消除“旧轮已经产生外部副作用、但 Bell 尚未写入 accepted ledger”后的顺序重投。因此正式 injector／Runtime 必须以 `wake_id` 做幂等，不能把 systemd 清理当成 exactly-once 保证。
+
+Windows 当前代码路径不属于首发支持和验收范围：named pipe 对等目录路径的归一化、异常退出恢复和 injector 进程树终止都尚未完成同等级证明。在这些边界单独确认前，不得把 Windows 描述为可用于真实部署。
+
 ## SSE 协议骨架
 
 连接必须返回 `Content-Type: text/event-stream`。connect timeout 会一直覆盖到合法握手完成，心跳或未知事件不能延长握手期限。第一个受识别事件必须是：
@@ -124,7 +144,7 @@ injector 必须只向 stdout 返回一行：
 
 一个状态目录只属于一个 Bell 实例，token 换发后继续复用这份 ledger 和同一把目录锁。进程正常退出时 socket 由运行时关闭；异常断电留下 socket 路径时，新 Bell 会先通过本地连接确认是否仍有真实持有者，只在连接已经明确拒绝时清理残留并重新取得锁。不要在两台机器复制同一 token；这种情况应当在 Doorbell 撤销旧 token 并换发。
 
-投递语义是至少一次，不是绝对 exactly-once。Runtime 已接受、但铃还没来得及写本地账本就崩溃的极小窗口仍可能重复唤醒，因此 injector 和 Runtime 如果能做幂等，也应继续使用 `wake_id`。
+投递语义是至少一次，不是绝对 exactly-once。Runtime 已接受、但铃还没来得及写本地账本就崩溃的极小窗口仍可能重复唤醒，因此正式 injector 和 Runtime 必须使用 `wake_id` 做幂等。
 
 收到成功 ACK 的 accepted 记录保留 180 天后可清理；尚未 ACK 的记录永不自动删除。Doorbell 服务端一旦持久确认 accepted，就不得重新投递同一个 `wake_id`。
 
