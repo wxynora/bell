@@ -156,5 +156,6 @@ injector 必须只向 stdout 返回一行：
 ## 当前边界
 
 - 测试只使用本地假 SSE、假 HTTP 和子进程，没有连接真实 Doorbell、农场、网关或模型。
-- Doorbell 服务端首版已经实现独立 digest-only token、认证 SSE、连接 epoch、稳定 wake 重放、匹配确认、信箱未读聚合和权威取消；是否已经安装到某户仍以该户的真实 service 状态为准。
+- Doorbell 服务端首版已经实现独立 digest-only token、认证 SSE、连接 epoch、稳定 wake 重放、匹配确认、信箱未读聚合和权威取消。`mailbox_unread` wake 本身就是交给小机的完整系统通知，不是让小机打开、读取或寻找人类邮箱；Bell 不提供信件标题、正文、列表或读取入口，家庭 injector 也不得在该 system 事件后追加取信／回应 user 指令。
+- 首户 Linux service 已安装并启用；其他家庭是否已经安装仍以该户的真实 service 状态为准。
 - 许可证为 [PolyForm Noncommercial License 1.0.0](LICENSE)。这是源码可见的非商业软件许可证，不属于允许商业使用的开源许可证；商业使用必须另行取得版权所有者明确授权。
