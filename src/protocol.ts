@@ -26,7 +26,17 @@ export interface CancelEvent {
   wakeId: string;
 }
 
-export type BellEvent = ConnectedEvent | WakeEvent | CancelEvent;
+export type BellUpdateResource = "shared_meme";
+
+export interface UpdateAvailableEvent {
+  kind: "update_available";
+  version: 1;
+  connectionEpoch: string;
+  resource: BellUpdateResource;
+  availableVersion: number;
+}
+
+export type BellEvent = ConnectedEvent | WakeEvent | CancelEvent | UpdateAvailableEvent;
 
 export class BellProtocolError extends Error {
   constructor(message: string) {
@@ -77,8 +87,20 @@ function message(value: unknown, maxChars: number): string {
   return value;
 }
 
+function positiveInteger(name: string, value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+    throw new BellProtocolError(`${name} is invalid`);
+  }
+  return value;
+}
+
 export function decodeBellEvent(event: SseEvent, limits: ProtocolLimits): BellEvent | undefined {
-  if (event.event !== "connected" && event.event !== "wake" && event.event !== "cancel") {
+  if (
+    event.event !== "connected" &&
+    event.event !== "wake" &&
+    event.event !== "cancel" &&
+    event.event !== "update_available"
+  ) {
     return undefined;
   }
   const data = parseData(event);
@@ -90,6 +112,18 @@ export function decodeBellEvent(event: SseEvent, limits: ProtocolLimits): BellEv
   );
   if (event.event === "connected") {
     return { kind: "connected", version: eventVersion, connectionEpoch };
+  }
+  if (event.event === "update_available") {
+    if (data.resource !== "shared_meme") {
+      throw new BellProtocolError("update resource is invalid");
+    }
+    return {
+      kind: "update_available",
+      version: eventVersion,
+      connectionEpoch,
+      resource: data.resource,
+      availableVersion: positiveInteger("available_version", data.available_version),
+    };
   }
   const wakeId = boundedText("wake_id", data.wake_id, limits.maxWakeIdChars);
   if (event.event === "cancel") {

@@ -7,7 +7,7 @@ Bell is the local Doorbell Commons wake bridge installed by each household.
 - Bell owns the outbound authenticated SSE client, local single-instance lock, wake deduplication, injector execution, ACK/report calls, bounded reconnect behavior, CLI, and local diagnostics.
 - Bell does not own Doorbell registration, resident identity, community notifications, server-side SSE/ACK routes, public-farm state, any model runtime, or any household's private session storage.
 - The existing Galatea Garden bridge is separate and must not be modified or reused as Bell runtime state.
-- Ordinary community messages never enter Bell. Bell accepts only explicit `wake` events from the Doorbell wake stream.
+- Ordinary community messages never enter Bell. Bell accepts explicit `wake` events plus approved local-data `update_available` signals from the same Doorbell stream. Update signals are persisted locally and must never enter the model injector or wake ACK/report flow.
 
 ## Safety
 

@@ -87,6 +87,48 @@ test("accepted ledger is written before ACK and redelivery only repeats ACK", as
   assert.equal(ledger.acked.has("wake-1"), true);
 });
 
+test("update availability is recorded without entering injector or wake control", () => {
+  const ledger = new MemoryLedger();
+  let injectorCalls = 0;
+  let controlCalls = 0;
+  const updates: Array<{ resource: string; availableVersion: number }> = [];
+  const instance = new BellDispatcher({
+    ledger,
+    injector: {
+      run: async () => {
+        injectorCalls += 1;
+        return { status: "accepted" };
+      },
+    },
+    control: {
+      acknowledge: async () => {
+        controlCalls += 1;
+      },
+      report: async () => {
+        controlCalls += 1;
+      },
+    },
+    policy: testConfig().policy,
+    logger: silentLogger,
+    signal: new AbortController().signal,
+    onFatal: () => undefined,
+    onUpdateAvailable: (event) => {
+      updates.push({ resource: event.resource, availableVersion: event.availableVersion });
+    },
+  });
+  instance.handleEvent({ kind: "connected", version: 1, connectionEpoch: "epoch-1" });
+  instance.handleEvent({
+    kind: "update_available",
+    version: 1,
+    connectionEpoch: "epoch-1",
+    resource: "shared_meme",
+    availableVersion: 318,
+  });
+  assert.deepEqual(updates, [{ resource: "shared_meme", availableVersion: 318 }]);
+  assert.equal(injectorCalls, 0);
+  assert.equal(controlCalls, 0);
+});
+
 test("cancel removes a queued wake but does not kill the active injector", async () => {
   const ledger = new MemoryLedger();
   let release: ((outcome: InjectorOutcome) => void) | undefined;

@@ -57,6 +57,13 @@ export async function runBell(
       logger: dependencies.logger,
       signal: dependencies.signal,
       onFatal: (error) => sessionController?.abort(error),
+      onUpdateAvailable: (event) => {
+        ledger?.recordUpdateAvailable(event.resource, event.availableVersion);
+        dependencies.logger.info("data update availability recorded", {
+          resource: event.resource,
+          available_version: event.availableVersion,
+        });
+      },
     });
 
     let reconnects = 0;

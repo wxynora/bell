@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { silentLogger } from "../src/logging.js";
 import { acquireProcessLock } from "../src/process-lock.js";
 import { runBell } from "../src/runner.js";
+import { SqliteWakeLedger } from "../src/state/ledger.js";
 import { BellTransportError } from "../src/transport-error.js";
 import { testConfig } from "./helpers.js";
 
@@ -36,6 +37,54 @@ test("runner stops after the explicit reconnect budget and releases its lock", a
     assert.equal(calls, 2);
     const lock = await acquireProcessLock(directory);
     await lock.release();
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("runner persists shared-meme availability without calling the injector", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "bell-runner-update-"));
+  const controller = new AbortController();
+  let streamCalls = 0;
+  let injectorCalls = 0;
+  const config = testConfig({ stateDirectory: directory });
+  try {
+    await runBell(config, {
+      logger: silentLogger,
+      signal: controller.signal,
+      random: () => 0.5,
+      injectorRun: async () => {
+        injectorCalls += 1;
+        return { status: "accepted" };
+      },
+      fetchImpl: async () => {
+        streamCalls += 1;
+        if (streamCalls === 2) {
+          controller.abort(new Error("update recorded"));
+          throw controller.signal.reason;
+        }
+        return new Response(
+          `event: connected\ndata: ${JSON.stringify({
+            version: 1,
+            connection_epoch: "epoch-update",
+          })}\n\nevent: update_available\ndata: ${JSON.stringify({
+            version: 1,
+            connection_epoch: "epoch-update",
+            resource: "shared_meme",
+            available_version: 318,
+          })}\n\n`,
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      },
+    });
+    assert.equal(injectorCalls, 0);
+    const ledger = new SqliteWakeLedger(
+      directory,
+      config.policy.sqliteBusyTimeoutMs,
+      config.policy.acceptedRetentionDays,
+    );
+    assert.equal(ledger.getUpdate("shared_meme")?.availableVersion, 318);
+    ledger.close();
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

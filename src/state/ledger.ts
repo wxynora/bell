@@ -1,6 +1,7 @@
 import { chmodSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import type { BellUpdateResource } from "../protocol.js";
 
 export interface AcceptedWakeRecord {
   wakeId: string;
@@ -14,6 +15,14 @@ export interface WakeLedger {
   markAcked(wakeId: string, ackedAt?: string): void;
   listUnacked(): AcceptedWakeRecord[];
   close(): void;
+}
+
+export interface BellUpdateRecord {
+  resource: BellUpdateResource;
+  availableVersion: number;
+  appliedVersion: number;
+  signaledAt: string;
+  appliedAt?: string;
 }
 
 export class SqliteWakeLedger implements WakeLedger {
@@ -40,6 +49,14 @@ export class SqliteWakeLedger implements WakeLedger {
       CREATE INDEX IF NOT EXISTS accepted_wakes_acked
         ON accepted_wakes(acked_at)
         WHERE acked_at IS NOT NULL;
+      CREATE TABLE IF NOT EXISTS bell_updates (
+        resource TEXT PRIMARY KEY,
+        available_version INTEGER NOT NULL CHECK(available_version > 0),
+        applied_version INTEGER NOT NULL DEFAULT 0 CHECK(applied_version >= 0),
+        signaled_at TEXT NOT NULL,
+        applied_at TEXT,
+        CHECK(applied_version <= available_version)
+      ) STRICT;
     `);
   }
 
@@ -88,6 +105,86 @@ export class SqliteWakeLedger implements WakeLedger {
       acceptedAt: row.accepted_at,
       ...(row.acked_at === null ? {} : { ackedAt: row.acked_at }),
     }));
+  }
+
+  recordUpdateAvailable(
+    resource: BellUpdateResource,
+    availableVersion: number,
+    signaledAt = new Date().toISOString(),
+  ): void {
+    if (!Number.isSafeInteger(availableVersion) || availableVersion <= 0) {
+      throw new Error("availableVersion must be a positive safe integer");
+    }
+    if (!Number.isFinite(Date.parse(signaledAt))) {
+      throw new Error("signaledAt must be a valid timestamp");
+    }
+    this.#database
+      .prepare(
+        `INSERT INTO bell_updates(
+           resource, available_version, applied_version, signaled_at, applied_at
+         ) VALUES (?, ?, 0, ?, NULL)
+         ON CONFLICT(resource) DO UPDATE SET
+           available_version=MAX(bell_updates.available_version, excluded.available_version),
+           signaled_at=CASE
+             WHEN excluded.available_version > bell_updates.available_version
+             THEN excluded.signaled_at
+             ELSE bell_updates.signaled_at
+           END`,
+      )
+      .run(resource, availableVersion, signaledAt);
+  }
+
+  markUpdateApplied(
+    resource: BellUpdateResource,
+    appliedVersion: number,
+    appliedAt = new Date().toISOString(),
+  ): void {
+    if (!Number.isSafeInteger(appliedVersion) || appliedVersion <= 0) {
+      throw new Error("appliedVersion must be a positive safe integer");
+    }
+    if (!Number.isFinite(Date.parse(appliedAt))) {
+      throw new Error("appliedAt must be a valid timestamp");
+    }
+    this.#database
+      .prepare(
+        `INSERT INTO bell_updates(
+           resource, available_version, applied_version, signaled_at, applied_at
+         ) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(resource) DO UPDATE SET
+           available_version=MAX(bell_updates.available_version, excluded.available_version),
+           applied_version=MAX(bell_updates.applied_version, excluded.applied_version),
+           applied_at=CASE
+             WHEN excluded.applied_version > bell_updates.applied_version
+             THEN excluded.applied_at
+             ELSE bell_updates.applied_at
+           END`,
+      )
+      .run(resource, appliedVersion, appliedVersion, appliedAt, appliedAt);
+  }
+
+  getUpdate(resource: BellUpdateResource): BellUpdateRecord | undefined {
+    const row = this.#database
+      .prepare(
+        `SELECT resource, available_version, applied_version, signaled_at, applied_at
+         FROM bell_updates WHERE resource=?`,
+      )
+      .get(resource) as
+      | {
+          resource: BellUpdateResource;
+          available_version: number;
+          applied_version: number;
+          signaled_at: string;
+          applied_at: string | null;
+        }
+      | undefined;
+    if (row === undefined) return undefined;
+    return {
+      resource: row.resource,
+      availableVersion: row.available_version,
+      appliedVersion: row.applied_version,
+      signaledAt: row.signaled_at,
+      ...(row.applied_at === null ? {} : { appliedAt: row.applied_at }),
+    };
   }
 
   close(): void {

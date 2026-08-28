@@ -4,7 +4,12 @@ import { delay } from "./delay.js";
 import type { InjectorOutcome } from "./injector.js";
 import type { Logger } from "./logging.js";
 import { safeId } from "./logging.js";
-import { BellProtocolError, type BellEvent, type WakeEvent } from "./protocol.js";
+import {
+  BellProtocolError,
+  type BellEvent,
+  type UpdateAvailableEvent,
+  type WakeEvent,
+} from "./protocol.js";
 import type { WakeLedger } from "./state/ledger.js";
 import { BellTransportError } from "./transport-error.js";
 
@@ -35,6 +40,7 @@ export interface DispatcherOptions {
   logger: Logger;
   signal: AbortSignal;
   onFatal(error: Error): void;
+  onUpdateAvailable?(event: UpdateAvailableEvent): void;
 }
 
 interface QueueItem {
@@ -81,6 +87,10 @@ export class BellDispatcher {
     }
     if (event.kind === "cancel") {
       this.#cancel(event.wakeId);
+      return;
+    }
+    if (event.kind === "update_available") {
+      this.#options.onUpdateAvailable?.(event);
       return;
     }
     this.#enqueue(event);

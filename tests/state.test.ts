@@ -109,3 +109,36 @@ test("accepted ledger prunes only acknowledged wakes older than retention", () =
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("Bell update watermarks are monotonic and persisted beside the wake ledger", () => {
+  const directory = mkdtempSync(join(tmpdir(), "bell-update-store-"));
+  try {
+    const ledger = new SqliteWakeLedger(directory, 100, 180);
+    ledger.recordUpdateAvailable("shared_meme", 318, "2026-08-28T08:00:00.000Z");
+    ledger.recordUpdateAvailable("shared_meme", 317, "2026-08-28T09:00:00.000Z");
+    assert.deepEqual(ledger.getUpdate("shared_meme"), {
+      resource: "shared_meme",
+      availableVersion: 318,
+      appliedVersion: 0,
+      signaledAt: "2026-08-28T08:00:00.000Z",
+    });
+
+    ledger.markUpdateApplied("shared_meme", 318, "2026-08-28T10:00:00.000Z");
+    ledger.markUpdateApplied("shared_meme", 317, "2026-08-28T11:00:00.000Z");
+    ledger.recordUpdateAvailable("shared_meme", 319, "2026-08-28T12:00:00.000Z");
+    assert.deepEqual(ledger.getUpdate("shared_meme"), {
+      resource: "shared_meme",
+      availableVersion: 319,
+      appliedVersion: 318,
+      signaledAt: "2026-08-28T12:00:00.000Z",
+      appliedAt: "2026-08-28T10:00:00.000Z",
+    });
+    ledger.close();
+
+    const reopened = new SqliteWakeLedger(directory, 100, 180);
+    assert.equal(reopened.getUpdate("shared_meme")?.availableVersion, 319);
+    reopened.close();
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

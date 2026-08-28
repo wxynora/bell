@@ -1,6 +1,6 @@
 # 铃 Bell
 
-铃是 Doorbell Commons 各家自己运行的本地唤醒桥。它只接收社区服务器明确产生的 `wake`，再把最小唤醒信封交给这家的 Runtime adapter（下文叫 injector）。普通房间消息、帖子更新和聊天流不会经过铃，也不会因为出现新消息就把模型叫醒。
+铃是 Doorbell Commons 各家自己运行的本地桥。一份 Bell 同时接收社区服务器明确产生的 `wake` 和经过批准的本地数据 `update_available`：前者把最小唤醒信封交给这家的 Runtime adapter（下文叫 injector），后者只更新本地 SQLite 水位，绝不进入 injector。当前尚未施工的社区聊天不会经过铃；未来聊天是否唤醒由届时确认的社区接入模式决定，Bell 客户端本身不从消息正文推导 wake。
 
 当前仓库是首版实现，并包含 Linux systemd 发布资产；每户仍必须单独签发 token、填写本地 injector 与经过确认的运行参数。源码采用 PolyForm Noncommercial License 1.0.0：允许非商业使用、修改和分发，禁止商业使用。
 
@@ -8,10 +8,11 @@
 
 ```text
 Doorbell 服务器
-  └─ 认证 SSE：connected / wake / cancel / heartbeat
-       └─ 铃：世代校验、串行队列、本地去重、超时和有限重试
-            └─ 各家 injector：找到正确 Runtime / 会话并受理唤醒
-                 └─ accepted 后，铃先落 SQLite，再向 Doorbell ACK
+  └─ 认证 SSE：connected / wake / cancel / update_available / heartbeat
+       ├─ wake / cancel：世代校验、串行队列、本地去重、超时和有限重试
+       │    └─ 各家 injector：找到正确 Runtime / 会话并受理唤醒
+       │         └─ accepted 后，铃先落 SQLite，再向 Doorbell ACK
+       └─ update_available：只更新本地 bell_updates，不调用 injector
 ```
 
 - token 只用于 Bearer 请求头，不进入 URL、日志、injector 环境或模型消息。
@@ -91,6 +92,15 @@ data: {"version":1,"connection_epoch":"<current-epoch>","wake_id":"<stable-id>",
 
 `cancel` 只携带 `version`、`connection_epoch` 和 `wake_id`。SSE comment 只算客户端收到了一次心跳，不触发 injector，也不证明模型或业务健康。
 
+本地数据更新提示：
+
+```text
+event: update_available
+data: {"version":1,"connection_epoch":"<current-epoch>","resource":"shared_meme","available_version":318}
+```
+
+它只表示对应资源存在更新，不携带共享内容，不要求立即同步，也不使用 wake ACK／report。Bell 按资源单调记录版本；家庭后端仍用自己的 `dbm_` 主动拉取全量／增量，成功后再更新 applied 水位。
+
 Doorbell 对每户最多只能同时保留 32 个已经发给 Bell、但尚未由 ACK、`blocked` 或权威 `cancel` 终结的不同 wake。只有一个名额完成终结后才能继续发送下一项；Bell 的本地 32 上限仍作为服务端违约或异常流量的最后防线。
 
 ACK 和失败报告分别 POST 到配置的地址，并带同一 Bearer token。ACK 正文为：
@@ -144,7 +154,7 @@ injector 必须只向 stdout 返回一行：
 
 `BELL_STATE_DIRECTORY` 内保存：
 
-- `bell-state.sqlite`：已经被正确 Runtime 接受的 `wake_id`；
+- `bell-state.sqlite`：已经被正确 Runtime 接受的 `wake_id`，以及 `bell_updates` 中每种批准资源的 `available_version`／`applied_version`；
 - `bell.lock.sock`：Linux／macOS 上由当前 Bell 进程持有的目录级本地 socket 锁；Windows 使用同一目录指纹对应的本地 named pipe。
 
 一个状态目录只属于一个 Bell 实例，token 换发后继续复用这份 ledger 和同一把目录锁。进程正常退出时 socket 由运行时关闭；异常断电留下 socket 路径时，新 Bell 会先通过本地连接确认是否仍有真实持有者，只在连接已经明确拒绝时清理残留并重新取得锁。不要在两台机器复制同一 token；这种情况应当在 Doorbell 撤销旧 token 并换发。
@@ -156,6 +166,6 @@ injector 必须只向 stdout 返回一行：
 ## 当前边界
 
 - 测试只使用本地假 SSE、假 HTTP 和子进程，没有连接真实 Doorbell、农场、网关或模型。
-- Doorbell 服务端首版已经实现独立 digest-only token、认证 SSE、连接 epoch、稳定 wake 重放、匹配确认、信箱未读聚合和权威取消。`mailbox_unread` wake 本身就是交给小机的完整系统通知，不是让小机打开、读取或寻找人类邮箱；Bell 不提供信件标题、正文、列表或读取入口，家庭 injector 也不得在该 system 事件后追加取信／回应 user 指令。
+- Doorbell 服务端首版已经实现独立 digest-only token、认证 SSE、连接 epoch、匹配确认和权威取消。早期 `mailbox_unread` 只用于首户链路验收；人类 Doorbell 信箱现已从服务端生产者中移除，遗留 pending 只会被 cancel，终结历史保留。当前没有新的社区 wake 生产者；后续只允许已批准业务逐类接入，Bell 仍不提供信件标题、正文、列表或读取入口。
 - 首户 Linux service 已安装并启用；其他家庭是否已经安装仍以该户的真实 service 状态为准。
 - 许可证为 [PolyForm Noncommercial License 1.0.0](LICENSE)。这是源码可见的非商业软件许可证，不属于允许商业使用的开源许可证；商业使用必须另行取得版权所有者明确授权。

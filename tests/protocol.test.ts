@@ -46,3 +46,41 @@ test("wake decoder preserves the fenced delivery fields", () => {
     createdAt: "2026-08-11T00:00:00.000Z",
   });
 });
+
+test("update-available decoder accepts only the shared-meme local data signal", () => {
+  const decoded = decodeBellEvent(
+    {
+      event: "update_available",
+      data: JSON.stringify({
+        version: 1,
+        connection_epoch: "epoch-1",
+        resource: "shared_meme",
+        available_version: 318,
+      }),
+    },
+    testConfig().policy,
+  );
+  assert.deepEqual(decoded, {
+    kind: "update_available",
+    version: 1,
+    connectionEpoch: "epoch-1",
+    resource: "shared_meme",
+    availableVersion: 318,
+  });
+  assert.throws(
+    () =>
+      decodeBellEvent(
+        {
+          event: "update_available",
+          data: JSON.stringify({
+            version: 1,
+            connection_epoch: "epoch-1",
+            resource: "mailbox",
+            available_version: 1,
+          }),
+        },
+        testConfig().policy,
+      ),
+    /update resource is invalid/u,
+  );
+});
