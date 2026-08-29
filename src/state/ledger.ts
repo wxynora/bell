@@ -162,6 +162,37 @@ export class SqliteWakeLedger implements WakeLedger {
       .run(resource, appliedVersion, appliedVersion, appliedAt, appliedAt);
   }
 
+  replaceUpdateWatermarkAfterFullSync(
+    resource: BellUpdateResource,
+    authoritativeVersion: number,
+    appliedAt = new Date().toISOString(),
+  ): void {
+    if (!Number.isSafeInteger(authoritativeVersion) || authoritativeVersion <= 0) {
+      throw new Error("authoritativeVersion must be a positive safe integer");
+    }
+    if (!Number.isFinite(Date.parse(appliedAt))) {
+      throw new Error("appliedAt must be a valid timestamp");
+    }
+    this.#database
+      .prepare(
+        `INSERT INTO bell_updates(
+           resource, available_version, applied_version, signaled_at, applied_at
+         ) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(resource) DO UPDATE SET
+           available_version=excluded.available_version,
+           applied_version=excluded.applied_version,
+           signaled_at=excluded.signaled_at,
+           applied_at=excluded.applied_at`,
+      )
+      .run(
+        resource,
+        authoritativeVersion,
+        authoritativeVersion,
+        appliedAt,
+        appliedAt,
+      );
+  }
+
   getUpdate(resource: BellUpdateResource): BellUpdateRecord | undefined {
     const row = this.#database
       .prepare(

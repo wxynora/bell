@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { decodeBellEvent } from "../src/protocol.js";
 import { SseParseError, SseParser, type SseEvent } from "../src/sse/parser.js";
@@ -44,6 +45,25 @@ test("wake decoder preserves the fenced delivery fields", () => {
     reason: "notification",
     message: "请读取铃野中的待处理通知。",
     createdAt: "2026-08-11T00:00:00.000Z",
+  });
+});
+
+test("Bell decodes the fixed ordinary wake fixture serialized by Doorbell", () => {
+  const fixture = JSON.parse(
+    readFileSync(new URL("./fixtures/doorbell-wake-v1.json", import.meta.url), "utf8"),
+  ) as { event: string; data: Record<string, unknown> };
+  const decoded = decodeBellEvent(
+    { event: fixture.event, data: JSON.stringify(fixture.data) },
+    testConfig().policy,
+  );
+  assert.deepEqual(decoded, {
+    kind: "wake",
+    version: 1,
+    connectionEpoch: "epoch-purchase-1",
+    wakeId: "purchase-wake-1",
+    reason: "farm_purchase_request",
+    message: "【📢来自铃野的通知】\n你的人类辛玥想要你给她买农场商店的普通种子 × 2。",
+    createdAt: "1970-01-01T00:00:04.000Z",
   });
 });
 

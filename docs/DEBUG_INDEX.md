@@ -5,8 +5,9 @@ Only completed and currently valid implementation entry points belong here.
 ## BELL-SHARED-MEME-UPDATE-003
 
 - 协议与分流：`src/{protocol,dispatcher,runner}.ts` 接受同一认证 SSE 上的 `update_available { resource: "shared_meme", available_version }`，先核验协议版本与当前 `connection_epoch`，再写本地状态；该事件不进入 injector、wake 队列、ACK 或 blocked report。
-- 本地状态：`src/state/ledger.ts` 在既有 `bell-state.sqlite` 新增 `bell_updates`，按资源单调保存 `available_version`／`applied_version` 与对应时间；重复或旧提示不回退水位，家庭后端只有在主动同步成功后才调用 applied 更新。Bell 本身不下载共享梗正文，也不要求收到提示后立即同步。
-- 定向验证：双 TypeScript 检查与构建通过；协议／状态／dispatcher／runner 本地隔离测试 21/21，覆盖非法资源拒绝、旧版本不回退、关闭重开仍保留水位，以及真实 runner 收到更新时 injector 与 wake control 均为 0 次调用。未连接真实 Doorbell、网关或模型，未 commit／push／install／deploy。
+- 本地状态：`src/state/ledger.ts` 在既有 `bell-state.sqlite` 保存 `bell_updates`。普通可用／已应用提示继续单调取高；家庭后端只有在 Doorbell 返回 `shared_meme_version_ahead` 且权威全量同步成功后，才可调用 `replaceUpdateWatermarkAfterFullSync()` 把 available／applied 精确替换为服务端当前版本，随后新版本仍正常形成 available > applied。Bell 本身不下载共享梗正文，也不要求收到提示后立即同步。
+- 普通 wake 固定样本：`tests/fixtures/doorbell-wake-v1.json` 与 Doorbell server 的同名 fixture 保持同一顶层 `message`＋`created_at` 外壳，并由 `tests/protocol.test.ts` 直接交给严格 `decodeBellEvent()`；不兼容旧 `payload` 形状。
+- 定向验证：双 TypeScript 检查通过；协议／状态定向测试 11/11，覆盖非法资源拒绝、旧版本不回退、`319 → 权威全量 318 → 新提示 319`、关闭重开仍保留水位及跨仓普通 wake fixture。全部均未 install／deploy，也未连接真实 Doorbell、网关或模型。
 
 ## BELL-LOCAL-BRIDGE-001
 
