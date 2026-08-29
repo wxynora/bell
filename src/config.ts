@@ -3,9 +3,7 @@ import type { LogLevel } from "./logging.js";
 
 export interface ProtocolLimits {
   maxEventBytes: number;
-  maxWakeIdChars: number;
   maxReasonChars: number;
-  maxMessageChars: number;
   maxTimestampChars: number;
   maxEpochChars: number;
   maxErrorCodeChars: number;
@@ -164,9 +162,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BellConfig {
     sqliteBusyTimeoutMs: positiveInteger(env, "BELL_SQLITE_BUSY_TIMEOUT_MS"),
     acceptedRetentionDays: fixedPositiveInteger(env, "BELL_ACCEPTED_RETENTION_DAYS", 180),
     maxEventBytes: positiveInteger(env, "BELL_MAX_EVENT_BYTES"),
-    maxWakeIdChars: positiveInteger(env, "BELL_MAX_WAKE_ID_CHARS"),
     maxReasonChars: positiveInteger(env, "BELL_MAX_REASON_CHARS"),
-    maxMessageChars: positiveInteger(env, "BELL_MAX_MESSAGE_CHARS"),
     maxTimestampChars: positiveInteger(env, "BELL_MAX_TIMESTAMP_CHARS"),
     maxEpochChars: positiveInteger(env, "BELL_MAX_EPOCH_CHARS"),
     maxErrorCodeChars: positiveInteger(env, "BELL_MAX_ERROR_CODE_CHARS"),

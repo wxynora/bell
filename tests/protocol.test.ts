@@ -67,6 +67,30 @@ test("Bell decodes the fixed ordinary wake fixture serialized by Doorbell", () =
   });
 });
 
+test("Bell decodes Main career and purchase wakes without character limits", () => {
+  const fixtures = JSON.parse(
+    readFileSync(new URL("./fixtures/doorbell-unbounded-wakes-v1.json", import.meta.url), "utf8"),
+  ) as Array<{ event: string; data: Record<string, unknown> }>;
+  assert.ok(String(fixtures[0]?.data.wake_id).length > 128);
+  assert.ok(String(fixtures[0]?.data.message).length > 512);
+  assert.ok(String(fixtures[1]?.data.message).length > 512);
+  for (const fixture of fixtures) {
+    const decoded = decodeBellEvent(
+      { event: fixture.event, data: JSON.stringify(fixture.data) },
+      testConfig().policy,
+    );
+    assert.deepEqual(decoded, {
+      kind: "wake",
+      version: 1,
+      connectionEpoch: fixture.data.connection_epoch,
+      wakeId: fixture.data.wake_id,
+      reason: fixture.data.reason,
+      message: fixture.data.message,
+      createdAt: fixture.data.created_at,
+    });
+  }
+});
+
 test("update-available decoder accepts only the shared-meme local data signal", () => {
   const decoded = decodeBellEvent(
     {

@@ -2,6 +2,13 @@
 
 Only completed and currently valid implementation entry points belong here.
 
+## BELL-UNBOUNDED-WAKE-FIELDS-004
+
+- 协议与配置：`src/{config,protocol}.ts` 不再读取或保存 `BELL_MAX_WAKE_ID_CHARS`／`BELL_MAX_MESSAGE_CHARS`；`wake_id` 只要求非空且没有首尾空白，`message` 只要求包含非空白内容。协议版本、reason／epoch／timestamp 校验和 `BELL_MAX_EVENT_BYTES` 单事件字节边界保持。
+- 跨仓事实：`tests/fixtures/doorbell-unbounded-wakes-v1.json` 与 Doorbell Main 同名 fixture 一致，包含 Main 真实生成的 138 字符职业 wake ID、614 字符完整委托回复及 540 字符购物动作通知；`tests/protocol.test.ts` 将两条原样交给 `decodeBellEvent()` 并要求完整保留。
+- 部署样例：`deploy/env/doorbell-bell.env.example` 删除两项被否定的字符上限配置；未修改 token、SSE、ACK／report、injector、重连或其他数值。
+- 验证：完整 Bell suite 41/41、双 TypeScript 检查和 build 通过，其中 config／protocol 12/12 直接覆盖两项配置删除与跨仓长 wake fixture。本批未 install／deploy，也未连接真实 Doorbell、网关或模型。
+
 ## BELL-SHARED-MEME-UPDATE-003
 
 - 协议与分流：`src/{protocol,dispatcher,runner}.ts` 接受同一认证 SSE 上的 `update_available { resource: "shared_meme", available_version }`，先核验协议版本与当前 `connection_epoch`，再写本地状态；该事件不进入 injector、wake 队列、ACK 或 blocked report。

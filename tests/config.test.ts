@@ -29,9 +29,7 @@ function completeEnvironment(): NodeJS.ProcessEnv {
     BELL_SQLITE_BUSY_TIMEOUT_MS: "15",
     BELL_ACCEPTED_RETENTION_DAYS: "180",
     BELL_MAX_EVENT_BYTES: "16",
-    BELL_MAX_WAKE_ID_CHARS: "17",
     BELL_MAX_REASON_CHARS: "18",
-    BELL_MAX_MESSAGE_CHARS: "19",
     BELL_MAX_TIMESTAMP_CHARS: "20",
     BELL_MAX_EPOCH_CHARS: "21",
     BELL_MAX_ERROR_CODE_CHARS: "22",
@@ -39,7 +37,7 @@ function completeEnvironment(): NodeJS.ProcessEnv {
   };
 }
 
-test("loadConfig requires every unconfirmed numeric policy explicitly", () => {
+test("loadConfig requires every remaining numeric policy explicitly", () => {
   const environment = completeEnvironment();
   delete environment.BELL_INJECTOR_TIMEOUT_MS;
   assert.throws(() => loadConfig(environment), BellConfigError);
@@ -52,6 +50,13 @@ test("loadConfig accepts HTTPS and explicit policy values", () => {
   assert.equal(config.policy.acceptedRetentionDays, 180);
   assert.equal(config.policy.maxErrorCodeChars, 22);
   assert.deepEqual(config.injector.args, []);
+});
+
+test("loadConfig does not require wake ID or message character limits", () => {
+  const environment = completeEnvironment();
+  assert.equal("BELL_MAX_WAKE_ID_CHARS" in environment, false);
+  assert.equal("BELL_MAX_MESSAGE_CHARS" in environment, false);
+  assert.doesNotThrow(() => loadConfig(environment));
 });
 
 test("loadConfig enforces the fixed pending and accepted-retention contracts", () => {

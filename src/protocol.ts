@@ -80,8 +80,15 @@ function boundedText(name: string, value: unknown, maxChars: number): string {
   return value;
 }
 
-function message(value: unknown, maxChars: number): string {
-  if (typeof value !== "string" || value.trim().length === 0 || value.length > maxChars) {
+function wakeId(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0 || value.trim() !== value) {
+    throw new BellProtocolError("wake_id is invalid");
+  }
+  return value;
+}
+
+function message(value: unknown): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
     throw new BellProtocolError("message is invalid");
   }
   return value;
@@ -125,17 +132,17 @@ export function decodeBellEvent(event: SseEvent, limits: ProtocolLimits): BellEv
       availableVersion: positiveInteger("available_version", data.available_version),
     };
   }
-  const wakeId = boundedText("wake_id", data.wake_id, limits.maxWakeIdChars);
+  const decodedWakeId = wakeId(data.wake_id);
   if (event.event === "cancel") {
-    return { kind: "cancel", version: eventVersion, connectionEpoch, wakeId };
+    return { kind: "cancel", version: eventVersion, connectionEpoch, wakeId: decodedWakeId };
   }
   return {
     kind: "wake",
     version: eventVersion,
     connectionEpoch,
-    wakeId,
+    wakeId: decodedWakeId,
     reason: boundedText("reason", data.reason, limits.maxReasonChars),
-    message: message(data.message, limits.maxMessageChars),
+    message: message(data.message),
     createdAt: boundedText("created_at", data.created_at, limits.maxTimestampChars),
   };
 }
