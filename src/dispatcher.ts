@@ -36,9 +36,11 @@ export interface DispatcherOptions {
     | "busyRetryDelayMs"
     | "busyMaxAttempts"
     | "maxPendingWakes"
+    | "wakeMaxAgeMs"
   >;
   logger: Logger;
   signal: AbortSignal;
+  now?: () => number;
   onFatal(error: Error): void;
   onUpdateAvailable?(event: UpdateAvailableEvent): void;
 }
@@ -46,6 +48,7 @@ export interface DispatcherOptions {
 interface QueueItem {
   wake: WakeEvent;
   ackOnly: boolean;
+  stale: boolean;
   cancelled: boolean;
 }
 
@@ -61,6 +64,7 @@ export class BellDispatcher {
   readonly #queue: QueueItem[] = [];
   readonly #queuedByWakeId = new Map<string, QueueItem>();
   readonly #idleWaiters = new Set<() => void>();
+  readonly #now: () => number;
   #connectionEpoch: string | undefined;
   #active: QueueItem | undefined;
   #pumping = false;
@@ -68,6 +72,7 @@ export class BellDispatcher {
 
   constructor(options: DispatcherOptions) {
     this.#options = options;
+    this.#now = options.now ?? Date.now;
   }
 
   handleEvent(event: BellEvent): void {
@@ -115,14 +120,29 @@ export class BellDispatcher {
     if (pendingWakeCount >= this.#options.policy.maxPendingWakes) {
       throw new BellTransportError("local wake queue capacity reached", "backpressure");
     }
+    const accepted = this.#options.ledger.isAccepted(wake.wakeId);
+    const stale = !accepted && this.#isStale(wake);
+    if (stale) {
+      this.#options.logger.info("stale wake expired without entering the injector", {
+        wake: safeId(wake.wakeId),
+        age_ms: this.#now() - Date.parse(wake.createdAt),
+      });
+    }
     const item: QueueItem = {
       wake,
-      ackOnly: this.#options.ledger.isAccepted(wake.wakeId),
+      ackOnly: accepted,
+      stale,
       cancelled: false,
     };
     this.#queue.push(item);
     this.#queuedByWakeId.set(wake.wakeId, item);
     this.#startPump();
+  }
+
+  #isStale(wake: WakeEvent): boolean {
+    const createdAt = Date.parse(wake.createdAt);
+    if (!Number.isFinite(createdAt)) return false;
+    return this.#now() - createdAt > this.#options.policy.wakeMaxAgeMs;
   }
 
   #cancel(wakeId: string): void {
@@ -165,7 +185,7 @@ export class BellDispatcher {
       }
       if (item.cancelled) continue;
       this.#active = item;
-      if (item.ackOnly) await this.#acknowledge(item.wake);
+      if (item.ackOnly || item.stale) await this.#acknowledge(item.wake);
       else await this.#deliver(item);
       this.#active = undefined;
     }
@@ -217,6 +237,14 @@ export class BellDispatcher {
       this.#options.ledger.markAcked(wake.wakeId);
       this.#options.logger.info("wake acknowledged", { wake: safeId(wake.wakeId) });
     } catch (error) {
+      if (this.#isTerminalWakeConflict(error)) {
+        this.#options.ledger.markAcked(wake.wakeId);
+        this.#options.logger.info("wake ACK rejected because the wake is already terminal", {
+          wake: safeId(wake.wakeId),
+          status_code: error.statusCode,
+        });
+        return;
+      }
       if (this.#isFatalControlError(error)) {
         throw new BellDispatcherFatalError("server permanently rejected wake ACK", {
           cause: error,
@@ -243,6 +271,14 @@ export class BellDispatcher {
         cause: error,
       });
     }
+  }
+
+  #isTerminalWakeConflict(error: unknown): error is BellTransportError {
+    return (
+      error instanceof BellTransportError &&
+      error.kind === "permanent" &&
+      error.statusCode === 409
+    );
   }
 
   #isFatalControlError(error: unknown): boolean {

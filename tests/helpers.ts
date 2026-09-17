@@ -1,5 +1,7 @@
 import type { BellConfig } from "../src/config.js";
 
+export const TEST_NOW_MS = Date.parse("2026-08-11T00:00:00.000Z");
+
 export function testConfig(overrides: Partial<BellConfig> = {}): BellConfig {
   return {
     streamUrl: new URL("http://127.0.0.1/wake/stream"),
@@ -27,6 +29,7 @@ export function testConfig(overrides: Partial<BellConfig> = {}): BellConfig {
       maxPendingWakes: 32,
       sqliteBusyTimeoutMs: 100,
       acceptedRetentionDays: 180,
+      wakeMaxAgeMs: 1800000,
       maxEventBytes: 4096,
       maxReasonChars: 128,
       maxTimestampChars: 64,

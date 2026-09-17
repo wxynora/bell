@@ -177,7 +177,7 @@ test("injector drain time after EOF cannot reset the reconnect budget", async ()
               wake_id: `wake-${calls}`,
               reason: "notification",
               message: "read state",
-              created_at: "2026-08-13T00:00:00.000Z",
+              created_at: new Date(Date.now() - 1000).toISOString(),
             })}\n\n`,
             { headers: { "content-type": "text/event-stream" } },
           );
@@ -238,7 +238,7 @@ test("local backpressure drains repeated full queues without spending the networ
             wake_id: wakeId,
             reason: "notification",
             message: "read state",
-            created_at: "2026-08-14T00:00:00.000Z",
+            created_at: new Date(Date.now() - 1000).toISOString(),
           })}\n\n`;
         }).join("");
         return new Response(

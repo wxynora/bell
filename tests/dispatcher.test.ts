@@ -7,7 +7,7 @@ import { silentLogger } from "../src/logging.js";
 import type { WakeEvent } from "../src/protocol.js";
 import type { AcceptedWakeRecord, WakeLedger } from "../src/state/ledger.js";
 import { BellTransportError } from "../src/transport-error.js";
-import { testConfig } from "./helpers.js";
+import { TEST_NOW_MS, testConfig } from "./helpers.js";
 
 class MemoryLedger implements WakeLedger {
   readonly accepted = new Set<string>();
@@ -27,7 +27,7 @@ class MemoryLedger implements WakeLedger {
   close(): void {}
 }
 
-function wake(wakeId: string): WakeEvent {
+function wake(wakeId: string, createdAt = new Date(TEST_NOW_MS).toISOString()): WakeEvent {
   return {
     kind: "wake",
     version: 1,
@@ -35,7 +35,7 @@ function wake(wakeId: string): WakeEvent {
     wakeId,
     reason: "notification",
     message: "read authoritative state",
-    createdAt: "2026-08-11T00:00:00.000Z",
+    createdAt,
   };
 }
 
@@ -53,6 +53,7 @@ function dispatcher(
     policy,
     logger: silentLogger,
     signal: new AbortController().signal,
+    now: () => TEST_NOW_MS,
     onFatal,
   });
 }
@@ -298,3 +299,114 @@ test("exhausted local outcomes report terminal blocked reasons without ACK", asy
     ]);
   }
 });
+
+test("a stale wake is acknowledged without entering the injector", async () => {
+  const ledger = new MemoryLedger();
+  let injectorCalls = 0;
+  let ackCalls = 0;
+  const instance = dispatcher(
+    ledger,
+    {
+      run: async () => {
+        injectorCalls += 1;
+        return { status: "accepted" };
+      },
+    },
+    {
+      acknowledge: async () => {
+        ackCalls += 1;
+      },
+      report: async () => undefined,
+    },
+  );
+  instance.handleEvent({ kind: "connected", version: 1, connectionEpoch: "epoch-1" });
+  instance.handleEvent(
+    wake("wake-stale", new Date(TEST_NOW_MS - 31 * 60 * 1000).toISOString()),
+  );
+  await instance.waitForIdle();
+  assert.equal(injectorCalls, 0);
+  assert.equal(ackCalls, 1);
+  assert.equal(ledger.accepted.has("wake-stale"), false);
+  assert.equal(ledger.acked.has("wake-stale"), true);
+});
+
+test("a wake exactly at the age limit still enters the injector", async () => {
+  const ledger = new MemoryLedger();
+  let injectorCalls = 0;
+  let ackCalls = 0;
+  const instance = dispatcher(
+    ledger,
+    {
+      run: async () => {
+        injectorCalls += 1;
+        return { status: "accepted" };
+      },
+    },
+    {
+      acknowledge: async () => {
+        ackCalls += 1;
+      },
+      report: async () => undefined,
+    },
+  );
+  instance.handleEvent({ kind: "connected", version: 1, connectionEpoch: "epoch-1" });
+  instance.handleEvent(
+    wake("wake-boundary", new Date(TEST_NOW_MS - 30 * 60 * 1000).toISOString()),
+  );
+  await instance.waitForIdle();
+  assert.equal(injectorCalls, 1);
+  assert.equal(ackCalls, 1);
+  assert.equal(ledger.accepted.has("wake-boundary"), true);
+});
+
+test("a terminal ACK conflict is recorded without stopping the dispatcher", async () => {
+  const ledger = new MemoryLedger();
+  let fatal: Error | undefined;
+  const instance = dispatcher(
+    ledger,
+    { run: async () => ({ status: "accepted" }) },
+    {
+      acknowledge: async () => {
+        throw new BellTransportError("server rejected the request", "permanent", {
+          statusCode: 409,
+        });
+      },
+      report: async () => undefined,
+    },
+    (error) => {
+      fatal = error;
+    },
+  );
+  instance.handleEvent({ kind: "connected", version: 1, connectionEpoch: "epoch-1" });
+  instance.handleEvent(wake("wake-conflict"));
+  await instance.waitForIdle();
+  assert.equal(fatal, undefined);
+  assert.equal(instance.fatalError, undefined);
+  assert.equal(ledger.acked.has("wake-conflict"), true);
+});
+
+test("a revoked credential still stops the dispatcher", async () => {
+  const ledger = new MemoryLedger();
+  let fatal: Error | undefined;
+  const instance = dispatcher(
+    ledger,
+    { run: async () => ({ status: "accepted" }) },
+    {
+      acknowledge: async () => {
+        throw new BellTransportError("server rejected the request", "permanent", {
+          statusCode: 401,
+        });
+      },
+      report: async () => undefined,
+    },
+    (error) => {
+      fatal = error;
+    },
+  );
+  instance.handleEvent({ kind: "connected", version: 1, connectionEpoch: "epoch-1" });
+  instance.handleEvent(wake("wake-unauthorized"));
+  await instance.waitForIdle();
+  assert.ok(fatal);
+  assert.equal(instance.fatalError, fatal);
+});
+

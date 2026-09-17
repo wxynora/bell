@@ -28,6 +28,7 @@ function completeEnvironment(): NodeJS.ProcessEnv {
     BELL_MAX_PENDING_WAKES: "32",
     BELL_SQLITE_BUSY_TIMEOUT_MS: "15",
     BELL_ACCEPTED_RETENTION_DAYS: "180",
+    BELL_WAKE_MAX_AGE_MS: "24",
     BELL_MAX_EVENT_BYTES: "16",
     BELL_MAX_REASON_CHARS: "18",
     BELL_MAX_TIMESTAMP_CHARS: "20",
@@ -49,6 +50,7 @@ test("loadConfig accepts HTTPS and explicit policy values", () => {
   assert.equal(config.policy.maxPendingWakes, 32);
   assert.equal(config.policy.acceptedRetentionDays, 180);
   assert.equal(config.policy.maxErrorCodeChars, 22);
+  assert.equal(config.policy.wakeMaxAgeMs, 24);
   assert.deepEqual(config.injector.args, []);
 });
 

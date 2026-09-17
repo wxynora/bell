@@ -2,6 +2,13 @@
 
 Only completed and currently valid implementation entry points belong here.
 
+## BELL-STALE-WAKE-EXPIRY-004
+
+- 过期作废：`src/config.ts`、`src/dispatcher.ts` 新增必填策略 `BELL_WAKE_MAX_AGE_MS`，dispatcher 增加可注入的 `now`（默认 `Date.now`）。入队时比较 `WakeEvent.createdAt` 与当前时间：年龄严格大于该阈值时标记 stale，只走 ACK，不调用 injector，也不写 accepted 账本，并记录 `stale wake expired without entering the injector` 与 `age_ms`。已在 accepted 账本中的重投唤醒仍只补 ACK，不受该阈值影响；`createdAt` 缺失或无法解析时不判过期。
+- 终态 ACK：`src/dispatcher.ts` 把服务端 `HTTP 409`（`wake_state_conflict`，即该 wake 已不是 pending）识别为可继续的终态：本地记 `markAcked` 并记录 `wake ACK rejected because the wake is already terminal`，不再抛 `BellDispatcherFatalError`。其他 permanent／protocol 控制错误（含 401／403）仍按原逻辑停止投递。
+- 定向验证：双 TypeScript 检查通过；本地隔离测试 45/45。新增四条：过期唤醒只 ACK 不进 injector、恰好等于阈值仍进 injector、409 ACK 冲突不再致命、401 仍致命。前两条与 409 三条在改动前的 dispatcher 上重跑，过期与 409 两条分别失败，改动后全部通过。未连接真实 Doorbell、网关或模型。
+- 首户部署：网关 `/opt/bell` 已应用同一源码改动并重新构建 `dist`，正式 env `/etc/doorbell-bell.env` 增补 `BELL_WAKE_MAX_AGE_MS=1800000`（30 分钟），`doorbell-bell.service` 重启后 active／`NRestarts=0`。重连补投的三条积压唤醒（age 12630325／2430386／1968853 ms）全部只 ACK、未进 injector，网关侧没有产生新的 bell 通知。
+
 ## BELL-UNBOUNDED-WAKE-FIELDS-004
 
 - 协议与配置：`src/{config,protocol}.ts` 不再读取或保存 `BELL_MAX_WAKE_ID_CHARS`／`BELL_MAX_MESSAGE_CHARS`；`wake_id` 只要求非空且没有首尾空白，`message` 只要求包含非空白内容。协议版本、reason／epoch／timestamp 校验和 `BELL_MAX_EVENT_BYTES` 单事件字节边界保持。
